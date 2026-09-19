@@ -53,13 +53,6 @@ node scripts/install.mjs --uninstall --keep-env       # 保留环境变量
 | `skills/token-stats/SKILL.md` | 教会 agent 怎么跑、怎么解释这些数字 |
 | `scripts/install.mjs` | 写入用户插件注册表（改前留 `.bak` 备份） |
 
-## 安装 / 卸载
-
-```bash
-node scripts/install.mjs            # 安装到 ~/.qoder-cn
-node scripts/install.mjs --uninstall
-```
-
 ## 改了代码不想重装
 
 `install.mjs` 是往 `plugins/cache/local/` 里拷一份**快照**，并在 `SOURCE` 文件里记下源码目录。
