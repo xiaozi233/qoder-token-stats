@@ -1,4 +1,4 @@
-# token-stats
+# Qoder Token Stats
 
 A Qoder plugin that reports per-turn token throughput after every reply, in the
 same shape as the app's status line:
@@ -7,6 +7,17 @@ same shape as the app's status line:
 ⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 3,389 tok / 生成 60.6s · 45 段 / 峰 84.6
 会话累计 27.8 tok/s · ~14,868 tok / 533.1s · 78 段 / 峰 60.9 · 3 轮
 ```
+
+## Quick start
+
+```bash
+git clone <this repo> && cd qoder-token-stats
+node scripts/install.mjs        # registers into ~/.qoder-cn, backs up both files
+```
+
+Restart Qoder — the plugin registry is reconciled once at startup. The `Stop`
+hook then prints the line above after every reply, and the `token-stats` skill
+lets the agent answer "本轮多少 tok/s".
 
 ## Layout
 
@@ -28,8 +39,6 @@ node scripts/install.mjs            # register into ~/.qoder-cn
 node scripts/install.mjs --uninstall
 ```
 
-Restart Qoder afterwards: the plugin registry is reconciled once at startup.
-
 ## Iterating without reinstalling
 
 `install.mjs` copies a snapshot into `plugins/cache/local/` and records the
@@ -37,11 +46,12 @@ checkout path in `SOURCE`. After editing, either re-run the installer, or point
 the wrapper at the live checkout:
 
 ```bash
-set TOKEN_STATS_SOURCE=D:\test\qoder-plugin\token-stats
+set TOKEN_STATS_SOURCE=<path to this checkout>
 ```
 
 With that set, `bin/token-stats.cmd` runs `runtime/*.mjs` from the checkout
 instead of the installed copy. Unset it before relying on the hook in real use.
+
 
 ## How the numbers are derived
 

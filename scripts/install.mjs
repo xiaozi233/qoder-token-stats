@@ -59,14 +59,19 @@ if (process.argv.includes('--uninstall')) {
   process.exit(0);
 }
 
-copyDir(source, installPath);
-fs.writeFileSync(path.join(installPath, 'SOURCE'), `${source}\n`, 'utf8');
-
 const registry = readJson(registryFile, { version: 2, plugins: {} });
 registry.version = registry.version || 2;
 registry.plugins = registry.plugins || {};
-const now = new Date().toISOString();
+
 const previous = registry.plugins[key]?.[0];
+if (previous?.installPath && path.resolve(previous.installPath) !== path.resolve(installPath)) {
+  fs.rmSync(previous.installPath, { recursive: true, force: true });
+}
+
+copyDir(source, installPath);
+fs.writeFileSync(path.join(installPath, 'SOURCE'), `${source}\n`, 'utf8');
+
+const now = new Date().toISOString();
 registry.plugins[key] = [
   {
     scope: 'user',

@@ -1,6 +1,0 @@
-{
-  "name": "token-stats",
-  "displayName": "Token Stats",
-  "version": "0.1.0",
-  "description": "Show per-turn token throughput (tok/s, first-token latency, segments, peak) after every reply"
-}
