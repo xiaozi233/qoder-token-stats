@@ -77,7 +77,7 @@ Qoder 还在运行时该脚本会拒绝执行——因为第二个实例只会�
 | `runtime/stats.mjs` | 解析 Qoder 会话日志、计算各项指标 |
 | `runtime/prompt-submit.mjs` | `UserPromptSubmit` 钩子：给本轮打时间戳，并注入显示指令 |
 | `runtime/stop-stats.mjs` | `Stop` 钩子：归档本轮统计行 |
-| `runtime/token-stats.mjs` | CLI（`--current` 给模型收尾用，`--session` 查历史） |
+| `runtime/token-stats.mjs` | CLI（`--current --key <k>` 给模型收尾用，`--session` 查历史） |
 | `skills/token-stats/SKILL.md` | 教会 agent 怎么跑、怎么解释这些数字 |
 | `scripts/install.mjs` | 写入用户插件注册表（改前留 `.bak` 备份） |
 
@@ -128,15 +128,19 @@ Qoder 插件没有 UI 扩展点，而 `Stop` 钩子的 stdout 会被包成 SDK �
 客户端并不渲染。所以那行可见的文字是**让模型自己打出来的**：
 
 ```
-UserPromptSubmit ──写入 state.json──┐
-                                    └─additionalContext：「收尾时运行 --current，
-                                       把输出原样引用到回复末尾」
-模型做完工具 → 运行 token-stats --current → 用引用块贴出这一行
+UserPromptSubmit ──为本轮生成 key，写入 state.json──┐
+                                                     └─additionalContext：
+                                「收尾时运行 token-stats --current --key <本轮 key>，
+                                  把输出原样引用到回复末尾」
+模型做完工具 → 运行 token-stats --current --key … → 用引用块贴出这一行
 Stop          → 把同一行归档到 history.jsonl / latest.md
 ```
 
-`--current` 只报告「起始时间不早于 UserPromptSubmit 写入的时间戳」的轮次，所以绝不会
-把上一轮的数字当本轮显示；没有符合条件的轮次时它不输出任何内容，回复里也就不出现统计行。
+每轮一个 12 位十六进制 key，模型读回的是自己那条记录，不再和别的会话抢同一个槽位。
+之前正是这个抢槽位让**会话的第一轮永远不显示**：那一轮 transcript 还没落盘，旧的
+「这是不是真实会话」探测判定失败，指令根本没注入。不带 key 的 `--current` 仍然可用——
+它回落到「最近一次拥有 transcript 的会话」记录的轮次，后台子会话动不了这个槽位。
+两种情况下，只要本轮还没有属于自己的 model 请求，就一律不输出，绝不会把上一轮的数字当本轮显示。
 
 这套设计直接来自 [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor)——
 它面对的是同一个「钩子画不了 UI」的问题，用的是同一个解法。

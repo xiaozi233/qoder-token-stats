@@ -148,6 +148,7 @@ function buildTurnMetrics(turnId, events, responses, sinceMs) {
   // Qoder reuses one turn_id across several user messages, so "the turn that
   // began after this prompt" is not a thing. Restricting to segments started
   // since the prompt is what actually isolates the current question.
+  let noSegmentsInWindow = false;
   if (Number.isFinite(sinceMs)) {
     const only = segments.filter((s) => s.start >= sinceMs - 2000);
     if (only.length) {
@@ -157,6 +158,10 @@ function buildTurnMetrics(turnId, events, responses, sinceMs) {
       // turn's original start here would re-admit the earlier messages' tokens.
       start = segments[0].start;
       realOutput = segments.reduce((acc, s) => acc + (s.realTokens || 0), 0);
+    } else {
+      // Nothing in this window means the turn being measured predates the prompt,
+      // so the numbers below are somebody else's turn. `--current` drops them.
+      noSegmentsInWindow = true;
     }
   }
 
@@ -238,6 +243,7 @@ function buildTurnMetrics(turnId, events, responses, sinceMs) {
     requests: segments.length,
     rate: tokens > 0 && genSeconds > 0 ? tokens / genSeconds : 0,
     peakRate: peak,
+    noSegmentsInWindow,
   };
 }
 

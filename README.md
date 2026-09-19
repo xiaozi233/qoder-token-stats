@@ -86,7 +86,7 @@ hands off to the first and inherits nothing.
 | `runtime/stats.mjs` | parses Qoder session logs, computes the metrics |
 | `runtime/prompt-submit.mjs` | `UserPromptSubmit` hook: timestamps the turn and injects the display instruction |
 | `runtime/stop-stats.mjs` | `Stop` hook: archives the finished turn's line |
-| `runtime/token-stats.mjs` | CLI (`--current` for the model, `--session` for history) |
+| `runtime/token-stats.mjs` | CLI (`--current --key <k>` for the model, `--session` for history) |
 | `skills/token-stats/SKILL.md` | teaches the agent to run and explain the numbers |
 | `scripts/install.mjs` | writes the user plugin registry (with `.bak` backups) |
 
@@ -150,16 +150,22 @@ as an SDK `hook_response` that the client does not render. So the visible line i
 produced by the model instead:
 
 ```
-UserPromptSubmit ──writes state.json──┐
-                                      └─additionalContext: "run --current at the
-                                         end of your answer and quote the output"
-Model finishes tools → runs token-stats --current → pastes the line in a blockquote
+UserPromptSubmit ──mints a per-turn key, writes state.json──┐
+                                                            └─additionalContext:
+                          "run token-stats --current --key <that key> at the end of
+                           your answer and quote the output"
+Model finishes tools → runs token-stats --current --key … → pastes the line in a blockquote
 Stop                 → archives the same line to history.jsonl / latest.md
 ```
 
-`--current` only reports a turn that started at or after the timestamp
-`UserPromptSubmit` wrote, so a previous turn can never be presented as the
-current one — if nothing qualifies, it prints nothing and no line is shown.
+Every turn gets its own 12-hex key, so a model reads back its own record instead of
+racing for one shared slot. That race is what used to swallow a session's very first
+turn: its transcript file does not exist yet, so it failed the old "is this a real
+session?" probe and never received the instruction at all. A keyless `--current`
+still works — it falls back to the newest turn recorded by a transcript-owning
+session, which only a real session may move. Either way a turn whose model requests
+all predate its own timestamp prints nothing, so a previous turn can never be
+presented as the current one.
 This design is taken from [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor),
 which solves the same "hooks cannot paint UI" problem the same way.
 

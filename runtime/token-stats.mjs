@@ -1,6 +1,7 @@
 // CLI for querying per-turn and per-session throughput from Qoder session logs.
 //
-//   token-stats.mjs --current             the in-flight turn, one bare line (or nothing)
+//   token-stats.mjs --current             the newest turn, one bare line (or nothing)
+//   token-stats.mjs --current --key <k>   the turn the hook minted key <k> for
 //   token-stats.mjs --session <id>        a specific session's last turn
 //   token-stats.mjs --session <id> -n 3   last three turns
 //   token-stats.mjs --json                machine readable
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     if (arg === '--session' || arg === '-s') out.sessionId = argv[++i];
     else if (arg === '--turns' || arg === '-n') out.turns = Number(argv[++i]) || 1;
     else if (arg === '--current') out.current = true;
+    else if (arg === '--key' || arg === '-k') out.key = argv[++i];
     else if (arg === '--json') out.json = true;
     else if (arg === '--help' || arg === '-h') out.help = true;
     else out.cwd = arg;
@@ -39,12 +41,24 @@ function readState(home) {
     if (!dir) continue;
     try {
       const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
-      if (Number.isFinite(state.promptAt)) return state;
+      if (Array.isArray(state.turns) || Number.isFinite(state.promptAt)) return state;
     } catch {
       /* try the next location */
     }
   }
   return null;
+}
+
+// `--key` picks the entry the UserPromptSubmit hook minted for this exact turn.
+// Without a key this falls back to the newest turn a transcript-owning session
+// recorded, which is the pre-key behaviour and can be stale on a first turn.
+function selectTurn(state, key) {
+  if (!state) return null;
+  if (key) {
+    const hit = (Array.isArray(state.turns) ? state.turns : []).find((t) => t && t.key === key);
+    return hit && Number.isFinite(hit.promptAt) ? hit : null;
+  }
+  return Number.isFinite(state.promptAt) ? state : null;
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -53,11 +67,13 @@ const home = qoderHome();
 if (args.help) {
   process.stdout.write(
     [
-      'usage: token-stats [--current] [--session <id>] [--turns N] [--json] [<cwd>]',
+      'usage: token-stats [--current [-k <key>]] [--session <id>] [--turns N] [--json] [<cwd>]',
       '',
       '--current prints one bare statistics line for the turn the UserPromptSubmit hook',
-      'last timestamped, and nothing at all if that turn has not produced model requests',
-      'yet — so a previous turn is never presented as the current one.',
+      'timestamped, and nothing at all if that turn has not produced model requests yet',
+      '— so a previous turn is never presented as the current one. Pass the --key the',
+      'hook injected to pin the lookup to this turn; without it the newest turn a',
+      'transcript-owning session recorded is what you get.',
       '',
       'Data source: ~/.qoder-cn/logs/sessions/<project>/<session>/segments/*.jsonl',
       '',
@@ -69,14 +85,19 @@ if (args.help) {
 const cwd = args.cwd || process.cwd();
 
 if (args.current) {
-  const state = readState(home);
-  if (!state) process.exit(0);
+  const turnRecord = selectTurn(readState(home), args.key);
+  if (!turnRecord || !turnRecord.sessionId) process.exit(0);
   // afterMs counts only model segments started since this prompt, because one
   // Qoder turn_id spans several user messages and its startedAt would otherwise
   // point at the first message of a long conversation.
-  const stats = computeStats({ home, sessionId: state.sessionId, cwd: state.cwd || cwd, afterMs: state.promptAt });
+  const stats = computeStats({
+    home,
+    sessionId: turnRecord.sessionId,
+    cwd: turnRecord.cwd || cwd,
+    afterMs: turnRecord.promptAt,
+  });
   const turn = stats.turn;
-  if (!turn || !turn.tokens || !turn.segments) process.exit(0);
+  if (!turn || !turn.tokens || !turn.segments || turn.noSegmentsInWindow) process.exit(0);
   process.stdout.write(`${formatTurnLine(stats)}\n`);
   process.exit(0);
 }

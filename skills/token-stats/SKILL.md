@@ -19,17 +19,22 @@ The `UserPromptSubmit` hook injects an instruction telling you to do this. Follo
 it: after all other work, just before your final summary, run
 
 ```bash
-node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --current
+node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --current --key <key>
 ```
 
-and paste whatever it prints, verbatim, inside a Markdown blockquote at the very
-end of your reply. Run it **every turn, including a turn that called no tools** —
-a plain text answer still has real output tokens. **If it prints nothing, show
-nothing** — do not fall back to an older turn, and never invent the numbers.
+Use the command exactly as the hook injected it — the `--key` is minted per turn
+and identifies *your* turn. Paste whatever it prints, verbatim, inside a Markdown
+blockquote at the very end of your reply. Run it **every turn, including a turn
+that called no tools** — a plain text answer still has real output tokens. **If it
+prints nothing, show nothing** — do not fall back to an older turn, and never
+invent the numbers.
 
-`--current` reads the timestamp the hook wrote when this turn began and only
-reports a turn that started at or after it, so a previous turn can never be
-presented as the current one.
+`--current` looks up the record the hook wrote for that key, so nothing has to
+guess which turn is live; without `--key` it falls back to the newest turn
+recorded by a transcript-owning session. A turn whose model requests all predate
+its own timestamp prints nothing, so a previous turn can never be presented as the
+current one — and the first turn of a session now gets a line too, which it did
+not before per-turn keys.
 
 ## Querying history
 
