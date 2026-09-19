@@ -1,5 +1,7 @@
 # Qoder Token Stats
 
+English | [简体中文](README.zh-CN.md)
+
 A Qoder plugin that reports per-turn token throughput after every reply, in the
 same shape as the app's status line:
 
@@ -51,7 +53,6 @@ set TOKEN_STATS_SOURCE=<path to this checkout>
 
 With that set, `bin/token-stats.cmd` runs `runtime/*.mjs` from the checkout
 instead of the installed copy. Unset it before relying on the hook in real use.
-
 
 ## How the numbers are derived
 
