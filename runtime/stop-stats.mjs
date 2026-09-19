@@ -46,6 +46,9 @@ try {
   // session on disk rather than reporting nothing.
 }
 
+// TODO(token-stats): temporary payload capture while the Stop contract is unknown.
+fs.writeFileSync(path.join(dataDir(), 'last-payload.json'), raw || '<empty stdin>', 'utf8');
+
 const sessionId = payload.session_id || payload.sessionId || process.env.QODER_SESSION_ID || newestSession(qoderHome());
 const stats = computeStats({ sessionId, cwd: payload.cwd || process.cwd() });
 

@@ -18,13 +18,18 @@ events into the same line the app shows in its status bar:
    if it is unset, locate the plugin under `~/.qoder-cn/plugins/cache/`.
 
    ```bash
-   node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --session "$QODER_SESSION_ID" "$PWD"
+   node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" "$PWD"
    ```
 
    Useful flags:
    - `--turns N` — last N turns instead of only the newest one
    - `--json` — full machine-readable breakdown per turn
-   - no `--session` — falls back to the most recently active session
+   - `--session <id>` — a specific session
+
+   Omit `--session` for "本轮": with none given the CLI picks the most recently
+   active session. Do **not** write `--session "$QODER_SESSION_ID"` — that
+   variable is not exported to hook or tool shells, so it silently expands to
+   empty and the run falls back to session-log discovery anyway.
 
    On Windows the same entry point is `bin/token-stats.cmd token-stats <flags>`.
 
@@ -53,4 +58,8 @@ permission prompts are excluded from generation seconds.
 
 - events: `~/.qoder-cn/logs/sessions/<project>/<session>/segments/*.jsonl`
 - transcript: `~/.qoder-cn/projects/<project>/<session>.jsonl`
-- archived hook output: `~/.qoder-cn/plugins/data/token-stats/{history.jsonl,latest.md}`
+- archived hook output: `~/.qoder-cn/plugins/data/token-stats-*/{history.jsonl,latest.md}`
+
+The data directory is `$QODER_PLUGIN_DATA`, which Qoder names
+`<plugin name>-<marketplace>` — for this plugin that is `token-stats-local`, not
+`token-stats`. Glob it rather than hard-coding.

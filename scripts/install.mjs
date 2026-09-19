@@ -20,9 +20,13 @@ const settingsFile = path.join(home, 'settings.json');
 const key = `${manifest.name}@local`;
 const installPath = path.join(home, 'plugins', 'cache', 'local', manifest.name, manifest.version);
 
+// VCS and dependency directories must never ride along into the plugin cache.
+const IGNORE = new Set(['.git', '.gitignore', 'node_modules', '.qoder']);
+
 function copyDir(from, to) {
   fs.mkdirSync(to, { recursive: true });
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    if (IGNORE.has(entry.name)) continue;
     const src = path.join(from, entry.name);
     const dst = path.join(to, entry.name);
     if (entry.isDirectory()) copyDir(src, dst);

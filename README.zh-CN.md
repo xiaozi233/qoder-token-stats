@@ -83,10 +83,21 @@ Qoder 会把结构化事件追加到 `~/.qoder-cn/logs/sessions/<项目>/<会话
 
 ## 钩子输出格式
 
-`stop-stats.mjs` 往 stdout 写 `{"systemMessage": "..."}`，与官方 `qoder-context` 插件用的是同一套
-格式。如果当前 Qoder 版本不显示这个字段，改用 `node runtime/stop-stats.mjs --text` 输出纯文本；
-或者直接看 `~/.qoder-cn/plugins/data/token-stats/latest.md`——不管显示与否，钩子每轮都会重写它，
-并把历史追加到同目录的 `history.jsonl`。
+`Stop` 钩子每轮确实会触发（`exit_code=0`，约 250ms），但它的 stdout 被包装成 SDK 流上的
+`system/hook_response` 消息，当前 Qoder 版本不会把它渲染到对话里，所以那行统计**不会内联显示**。
+
+稳定可见的是钩子同时写下的文件：
+
+```
+~/.qoder-cn/plugins/data/token-stats-local/latest.md       # 每轮重写
+~/.qoder-cn/plugins/data/token-stats-local/history.jsonl   # 每轮追加一条
+```
+
+数据目录就是 `$QODER_PLUGIN_DATA`，Qoder 按 `<插件名>-<marketplace>` 命名，所以带
+`-local` 后缀。想看数字可以直接问 agent（走 `token-stats` skill），或者读 `latest.md`。
+
+`stop-stats.mjs` 默认输出 `{"systemMessage": "..."}`，加 `--text` 输出纯文本；目前两种都不渲染，
+所以文件才是唯一可靠来源。
 
 ## 实测数据
 

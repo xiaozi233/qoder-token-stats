@@ -80,11 +80,24 @@ time-to-first-token, not a measured one.
 
 ## Hook output
 
-`stop-stats.mjs` writes `{"systemMessage": "..."}` on stdout, the format the
-`qoder-context` plugin also uses. If this Qoder build ignores that field, run
-`node runtime/stop-stats.mjs --text` to emit plain text instead, or read
-`~/.qoder-cn/plugins/data/token-stats/latest.md`, which the hook rewrites every
-turn regardless.
+The `Stop` hook does fire after every turn (`exit_code=0`, ~250 ms), but its
+stdout is forwarded as a `system/hook_response` message on the SDK stream and
+this Qoder build does not render it in the chat. So the line is not visible
+inline.
+
+What is reliably visible is the file the hook also writes:
+
+```
+~/.qoder-cn/plugins/data/token-stats-local/latest.md   # rewritten every turn
+~/.qoder-cn/plugins/data/token-stats-local/history.jsonl  # appended, one entry per turn
+```
+
+The data directory is `$QODER_PLUGIN_DATA`, which Qoder names
+`<plugin>-<marketplace>` — hence the `-local` suffix. Ask the agent for the
+numbers via the `token-stats` skill, or read `latest.md`.
+
+`stop-stats.mjs` emits `{"systemMessage": "..."}` by default and plain text with
+`--text`; neither is rendered today, so the file remains the source of truth.
 
 ## Verified
 
