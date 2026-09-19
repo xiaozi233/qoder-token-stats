@@ -44,6 +44,22 @@ Re-running with `--expose-token-usage` when the variable is already set leaves i
 alone. Uninstall clears it (a `0` value rather than deleting the entry, so the
 change is visible in `HKCU\Environment`).
 
+### If the `~` prefix does not disappear
+
+`setx` writes `HKCU\Environment` but only *notifies* running processes via
+`WM_SETTINGCHANGE`; whatever launched Qoder often does not re-read it, so the
+variable never reaches Qoder's own environment and token counts stay redacted.
+Check and fix it with the bundled launcher:
+
+```powershell
+powershell -File scripts/launch-with-usage.ps1 -CheckOnly   # what Qoder sees now
+# quit Qoder completely, then:
+powershell -File scripts/launch-with-usage.ps1              # starts it with the var set
+```
+
+The script refuses to run while Qoder is alive, because a second instance just
+hands off to the first and inherits nothing.
+
 ## Layout
 
 | Path | Purpose |

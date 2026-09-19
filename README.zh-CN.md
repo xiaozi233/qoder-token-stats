@@ -32,13 +32,28 @@ node scripts/install.mjs --expose-token-usage   # 注册插件 + 让 Qoder 输�
 ## 安装 / 卸载
 
 ```bash
-node scripts/install.mjs                          # 只装插件，token 数为估算
-node scripts/install.mjs --expose-token-usage         # 同时设 QODERCN_EXPOSE_TOKEN_USAGE=1
-node scripts/install.mjs --uninstall                  # 移除插件并清掉该环境变量
-node scripts/install.mjs --uninstall --keep-env       # 保留环境变量
+node scripts/install.mjs                        # 只装插件，token 数为估算
+node scripts/install.mjs --expose-token-usage   # 同时设 QODERCN_EXPOSE_TOKEN_USAGE=1
+node scripts/install.mjs --uninstall            # 移除插件并清掉该环境变量
+node scripts/install.mjs --uninstall --keep-env # 保留环境变量
 ```
 
 已设过该变量时重复执行不会覆盖。卸载时把它写成 `0` 而不是删除条目，方便你在注册表里看到改动痕迹。
+
+### 重启后 `~` 前缀没消失
+
+`setx` 只写 `HKCU\Environment`，对正在跑的进程仅发一次 `WM_SETTINGCHANGE` 广播；
+而**启动 Qoder 的那个进程往往根本不重读环境**（实测过：launcher 自己已退出、Qoder
+被系统收养，于是变量始终没进到 Qoder 的 env 里），token 数就仍被清零。用自带的启动脚本：
+
+```powershell
+powershell -File scripts/launch-with-usage.ps1 -CheckOnly   # 看 Qoder 现在能看到什么
+# 完全退出 Qoder，然后：
+powershell -File scripts/launch-with-usage.ps1              # 带着该变量启动它
+```
+
+Qoder 还在运行时该脚本会拒绝执行——因为第二个实例只会把请求转交给第一个，什么环境变量都继承不到。
+
 ## 目录结构
 
 | 路径 | 作用 |
