@@ -22,7 +22,18 @@ node scripts/install.mjs --expose-token-usage   # 注册插件 + 让 Qoder 输�
 `--expose-token-usage` 会把 `QODERCN_EXPOSE_TOKEN_USAGE=1` 写进 `HKCU\Environment`。
 不加这个开关，Qoder 会在写会话日志前把所有 token 计数清零，数字就只能是估算。
 
-然后**完全退出并重开 Qoder**——环境变量和插件注册表都只在进程启动时读取。之后每轮回答结束，
+**但只重开 Qoder 是不够的。** 快捷方式、任务栏、双击 exe 启动的程序，环境全部继承自
+`explorer.exe`，而它只在登录时读一次 `HKCU\Environment`，之后不再重读——所以登录后
+新增的变量对它们全都不可见。三选一：
+
+- 重启资源管理器（任务管理器 → Windows 资源管理器 → 重新启动，或
+  `Stop-Process -Name explorer -Force`）——一次性，之后点图标永远正常；
+- 注销再登录；
+- 或者不刷新，改用 `scripts/launch-with-usage.ps1` 启动 Qoder，它会在自己的进程里
+  先把变量设好。
+
+做完之后再**完全退出并重开 Qoder**（变量在进程启动时读取，插件注册表也同时 reconcile）。
+之后每轮回答结束，
 你会在回复末尾看到：
 
 ```

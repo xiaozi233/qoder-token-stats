@@ -22,10 +22,23 @@ node scripts/install.mjs --expose-token-usage   # register + ask Qoder for real 
 ```
 
 `--expose-token-usage` writes `QODERCN_EXPOSE_TOKEN_USAGE=1` into
-`HKCU\Environment`. Without it Qoder zeroes every token count on its way to the
-session log and the numbers stay estimated. Fully quit and reopen Qoder
-afterwards — the variable is read at process start, and the plugin registry is
-reconciled at the same time. The line then appears after every reply:
+`HKCU\Environment`. Without it Qoder zeroes every token count on its way to
+the session log and the numbers stay estimated.
+
+**Relaunching Qoder alone is not enough.** Shortcuts, the taskbar and double-clicking
+an exe all inherit their environment from `explorer.exe`, which reads
+`HKCU\Environment` once at logon and never again — so a variable added after
+logon is invisible to everything Explorer launches. Pick one:
+
+- restart Explorer (Task Manager → Windows Explorer → Restart, or
+  `Stop-Process -Name explorer -Force`) — one-time, after which shortcuts work
+  normally forever;
+- sign out and back in;
+- or skip the refresh and start Qoder via `scripts/launch-with-usage.ps1`, which sets
+  the variable in its own process first.
+
+Then fully quit and reopen Qoder — the variable is read at process start, and the
+plugin registry is reconciled at the same time. The line appears after every reply:
 
 ```
 ⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 3,389 tok / 生成 60.6s · 45 段 / 峰 84.6
