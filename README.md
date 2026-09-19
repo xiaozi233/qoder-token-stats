@@ -68,20 +68,25 @@ Per-segment token counts come from the session transcript
 `message.id` and paired to segments by nearest timestamp — retries and failed
 attempts make the two counts differ, so a positional zip would drift.
 
-**Token totals are estimated, not measured.** Verified 2026-09-20 rather than
-assumed: the client binary contains a full Anthropic usage parser
-(`output_tokens`, `cache_read_input_tokens`, `server_tool_use`, …), so the zeros
-are upstream and not a discarded field; `output_tokens` has never been non-zero in
-any historical log under `logs/runs/`; and no usage database exists —
-`main.sqlite`'s `chat_session_context_usage` reports `tokenCountsAvailable: false`.
-The only real throughput instrumentation in Qoder is an Aliyun RUM `fetch`
-collector that computes `time_to_first_token` and `inter_token_latency_avg` from
-SSE chunks, but it uploads to an analytics endpoint and never touches disk.
+**Token totals are estimated, not measured — but only because Qoder hides them.**
+The gateway *does* return usage. The client zeroes it on the way to the log:
 
-So the plugin counts CJK characters (≈1 token each) and latin words (≈1 token
-each) in assistant text, thinking, and tool arguments, and marks the result with a
-`~`. If the gateway starts reporting non-zero usage, the reported value wins
-automatically and the `~` disappears — no configuration needed.
+```js
+function ror(A) { return l7() ? A : 0 }                 // real value -> 0
+l3s = new Set(["input_tokens", "output_tokens", "completion_tokens",
+             "total_tokens", "cache_read_input_tokens", …])  // field-name blocklist
+// on write: preserveSessionTokenUsage ? raw data : redacted data
+//   where preserveSessionTokenUsage = (provider === "custom")
+```
+
+`preserveSessionTokenUsage` is only true for a BYOK `custom` provider, so on
+Qoder’s own gateway every `model.response.completed` logs zeros. Set the SDK’s
+`QODERCN_EXPOSE_TOKEN_USAGE=1` (values `1`/`true`/`yes`/`on`) in the environment
+before launching Qoder and the real numbers reach the log untouched. This plugin
+then switches to them automatically — `~` disappears, no configuration here.
+
+Until then it counts CJK characters (≈1 token each) and latin words (≈1 token each)
+in assistant text, thinking, and tool arguments, marking the result with a `~`.
 
 `首字` is turn start → the first `tool.requested` or `model.response.completed`
 event. Qoder does not log a first-token event, so this is an upper bound on

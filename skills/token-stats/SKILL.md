@@ -63,14 +63,16 @@ Wall-clock time is longer than `生成` because tool execution and permission
 prompts are excluded. Segments under 200 ms are dropped as bookkeeping artefacts
 rather than counted as generation.
 
-## Token totals are estimated
+## Token totals are estimated (for now)
 
-The gateway reports `output_tokens = 0` on every `model.response.completed`, and
-`~/.qoder-cn` holds no usage database the way ZCode's `model_usage` table does.
-Numbers are therefore counted from transcript text — CJK characters ≈ 1 token
-each, latin runs ≈ 1 token per word — and carry a `~` prefix. If the gateway
-starts reporting real usage, the reported value wins automatically and the `~`
-disappears; no configuration is involved.
+The gateway does return usage; Qoder zeroes it before writing the session log unless the
+provider is a BYOK `custom` one. Set `QODERCN_EXPOSE_TOKEN_USAGE=1` in the
+environment before launching Qoder and real numbers start appearing in
+`model.response.completed`. This plugin detects them automatically, drops the `~`
+prefix, and reports the true value — no configuration on its side.
+
+Until then numbers are counted from transcript text (CJK characters ≈ 1 token each,
+latin runs ≈ 1 token per word) and carry a `~` prefix.
 
 `首字` is likewise an upper bound: Qoder logs no first-token event, so this is
 turn start → first tool call or completed response, not a measured TTFT.

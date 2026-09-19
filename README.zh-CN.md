@@ -121,15 +121,22 @@ Stop          → 把同一行归档到 history.jsonl / latest.md
 
 - **统计行依赖模型配合。** 那是一串注入指令，不是渲染出来的控件——模型忽略它，这一行就不出现。
   Qoder 插件只能提供 hooks、MCP server 和 skill，没有 UI 扩展点，插件内部无法绘制常驻控件。
-- **token 总量是估算值，且这是查证过的结论、不是没试过。** 2026-09-20 实测：
-  客户端二进制里**有完整的 Anthropic usage 解析**（`output_tokens`、`cache_read_input_tokens`、
-  `server_tool_use` 等），所以那些 0 是上游没给、不是客户端丢弃；`logs/runs/` 下全部历史日志
-  中 `output_tokens` **从未出现非零**；也不存在 usage 数据库——`main.sqlite` 的
-  `chat_session_context_usage` 快照写着 `tokenCountsAvailable: false`。
-  Qoder 侧唯一真实测速的东西是阿里 RUM 的 fetch-collector（它确实算
-  `time_to_first_token` 与 `inter_token_latency_avg`），但它上报到分析端点、不落本地磁盘。
-  因此本插件改用字符估算：中日韩 1 字/token、拉丁词 1 词/token，结果前加 `~`。
-  一旦网关开始回传真实 usage，会自动改用真值、`~` 消失，无需任何配置。
+- **token 总量目前是估算值，但原因是 Qoder 主动隐藏，不是网关没给。** 客户端源码实证：
+
+  ```js
+  function ror(A) { return l7() ? A : 0 }                 // 真值 → 0
+  l3s = new Set(["input_tokens", "output_tokens", "completion_tokens",
+               "total_tokens", "cache_read_input_tokens", …])  // 字段名黑名单
+  // 写日志时：preserveSessionTokenUsage ? 原文 : 脱敏后的数据
+  //   而 preserveSessionTokenUsage = (provider === "custom")
+  ```
+
+  `preserveSessionTokenUsage` 只在 BYOK 的 `custom` provider 下为真，所以走 Qoder 自家网关时
+  每条 `model.response.completed` 落盘都是 0。在启动 Qoder 前设好 SDK 的官方环境变量
+  `QODERCN_EXPOSE_TOKEN_USAGE=1`（接受 `1`/`true`/`yes`/`on`），真实数值就会原样进日志；
+  本插件会**自动**切到真值，`~` 前缀消失，插件侧无需任何配置。
+
+  在那之前按字符估算：中日韩 1 字/token、拉丁词 1 词/token（含正文+thinking+工具参数），结果加 `~`。
   代码密集的轮次估算会偏——分词器对标点、缩进、标识符的计法与词数启发式差别较大。
 - **`首字` 是上界。** Qoder 不记录首 token 事件，取的是「轮开始 → 首次工具调用或整段响应完成」。
 
