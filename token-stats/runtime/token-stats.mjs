@@ -1,0 +1,65 @@
+// CLI for querying per-turn and per-session throughput from Qoder session logs.
+//
+//   token-stats.mjs                       newest session, last turn
+//   token-stats.mjs --session <id>        specific session
+//   token-stats.mjs --turns 3             last three turns
+//   token-stats.mjs --json                machine readable
+
+import process from 'node:process';
+import { computeStats, formatStatsLine, formatNumber, newestSession, qoderHome } from './stats.mjs';
+
+function parseArgs(argv) {
+  const out = { turns: 1 };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--session' || arg === '-s') out.sessionId = argv[++i];
+    else if (arg === '--turns' || arg === '-n') out.turns = Number(argv[++i]) || 1;
+    else if (arg === '--json') out.json = true;
+    else if (arg === '--help' || arg === '-h') out.help = true;
+    else out.cwd = arg;
+  }
+  return out;
+}
+
+const args = parseArgs(process.argv.slice(2));
+
+if (args.help) {
+  process.stdout.write(
+    [
+      'usage: token-stats [--session <id>] [--turns N] [--json] [<cwd>]',
+      '',
+      'Without --session the most recently active session is used.',
+      'Data source: ~/.qoder-cn/logs/sessions/<project>/<session>/segments/*.jsonl',
+      '',
+    ].join('\n'),
+  );
+  process.exit(0);
+}
+
+const sessionId = args.sessionId || process.env.QODER_SESSION_ID || newestSession(qoderHome());
+if (!sessionId) {
+  process.stderr.write('token-stats: no session log found\n');
+  process.exit(1);
+}
+const stats = computeStats({ sessionId, cwd: args.cwd || process.cwd() });
+if (stats.error) {
+  process.stderr.write(`token-stats: ${stats.error}\n`);
+  process.exit(1);
+}
+
+if (args.json) {
+  process.stdout.write(`${JSON.stringify(stats, null, 2)}\n`);
+  process.exit(0);
+}
+
+const selected = stats.turns.slice(-Math.max(1, args.turns));
+const lines = selected.map((t) => formatStatsLine({ turn: t }));
+const header = `session ${stats.sessionId}`;
+const totals = stats.session;
+const footer = `会话累计 ${formatNumber(totals.rate)} tok/s · ~${Math.round(totals.tokens)} tok / ${formatNumber(totals.genSeconds)}s · ${totals.segments} 段 / 峰 ${formatNumber(totals.peakRate)} · ${totals.turnCount} 轮`;
+const source =
+  totals.tokenSource === 'estimated'
+    ? 'token 来源: 估算（服务端 usage 返回 0）；~ 前缀表示估算值'
+    : 'token 来源: 服务端上报';
+
+process.stdout.write([header, ...lines, footer, source, ''].join('\n'));

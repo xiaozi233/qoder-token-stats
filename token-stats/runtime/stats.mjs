@@ -72,10 +72,11 @@ function loadEvents(sessionDir) {
   return events.filter((e) => e && e.type && e.ts);
 }
 
-function groupTurns(events) {
+function groupTurns(events, sessionId) {
   const turns = new Map();
   for (const e of events) {
-    if (!e.turn_id || typeof e.turn_id !== 'string') continue;
+    // Hook events are stamped with the session id, not a real turn id.
+    if (typeof e.turn_id !== 'string' || e.turn_id === sessionId) continue;
     if (!/^[0-9a-f-]{16,}$/i.test(e.turn_id)) continue;
     let turn = turns.get(e.turn_id);
     if (!turn) {
@@ -145,24 +146,47 @@ function buildTurnMetrics(turnId, events, responses) {
   const responseReal = turnResponses.reduce((acc, r) => acc + r.realTokens, 0);
   if (responseReal > 0) hasReal = true;
 
-  let segmentTokens;
-  if (hasReal) {
-    segmentTokens = () => 0;
-  } else if (turnResponses.length === segments.length && segments.length > 0) {
-    segmentTokens = (i) => estimateTokens(turnResponses[i].text);
-  } else {
-    const seconds = segments.reduce((acc, s) => acc + (s.end - s.start), 0);
-    const perSecond = seconds > 0 ? estimatedTokens / seconds : 0;
-    segmentTokens = (i) => (segments[i].end - segments[i].start) * perSecond;
+  // A transcript response is written when the model finishes, so its timestamp
+  // lines up with the matching model.response.completed event. Retries and
+  // failed attempts mean the counts can differ, hence nearest-neighbour pairing
+  // instead of a positional zip.
+  const secondsOf = (segment) => (segment.end == null ? 0 : (segment.end - segment.start) / 1000);
+  const taken = new Set();
+  const tokensOf = segments.map((segment) => {
+    if (!segment.end) return 0;
+    let best = -1;
+    let bestGap = Infinity;
+    for (let i = 0; i < turnResponses.length; i += 1) {
+      if (taken.has(i)) continue;
+      const gap = Math.abs(turnResponses[i].ts - segment.end);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = i;
+      }
+    }
+    if (best === -1 || bestGap > 5000) return -1;
+    taken.add(best);
+    return estimateTokens(turnResponses[best].text);
+  });
+
+  const matched = tokensOf.filter((t) => t >= 0);
+  let fallbackPerSecond = 0;
+  if (matched.length !== segments.length) {
+    const unmatched = estimatedTokens - matched.reduce((acc, t) => acc + t, 0);
+    const restSeconds = segments.reduce((acc, s, i) => (tokensOf[i] < 0 ? acc + secondsOf(s) : acc), 0);
+    fallbackPerSecond =
+      restSeconds > 0 && unmatched > 0
+        ? unmatched / restSeconds
+        : estimatedTokens / Math.max(segments.reduce((acc, s) => acc + secondsOf(s), 0), 1);
   }
 
   let peak = 0;
   let genSeconds = 0;
   for (let i = 0; i < segments.length; i += 1) {
-    const seconds = segments[i].end == null ? 0 : (segments[i].end - segments[i].start) / 1000;
+    const seconds = secondsOf(segments[i]);
     if (!(seconds > 0)) continue;
     genSeconds += seconds;
-    const tokens = hasReal ? segments[i].realTokens : segmentTokens(i);
+    const tokens = hasReal ? segments[i].realTokens : tokensOf[i] >= 0 ? tokensOf[i] : seconds * fallbackPerSecond;
     if (tokens > 0 && tokens / seconds > peak) peak = tokens / seconds;
   }
 
@@ -197,7 +221,7 @@ export function computeStats(options = {}) {
   if (!sessionDir) return { error: `no session log for ${sessionId}` };
 
   const events = loadEvents(sessionDir);
-  const turns = groupTurns(events);
+  const turns = groupTurns(events, sessionId);
   const ordered = [...turns.entries()]
     .map(([id, evs]) => ({ id, events: evs, start: Math.min(...evs.map((e) => Date.parse(e.ts))) }))
     .filter((t) => Number.isFinite(t.start))
@@ -254,6 +278,27 @@ function findTranscript(home, sessionId, cwd) {
 }
 
 const NUM = new Intl.NumberFormat('en-US');
+
+export function newestSession(home) {
+  const root = path.join(home, 'logs', 'sessions');
+  if (!fs.existsSync(root)) return null;
+  let best = null;
+  const walk = (dir, depth) => {
+    if (depth > 2) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const full = path.join(dir, entry.name);
+      if (depth === 1 && fs.existsSync(path.join(full, 'segments'))) {
+        const stat = fs.statSync(full);
+        if (!best || stat.mtimeMs > best.mtimeMs) best = entry.name;
+      } else {
+        walk(full, depth + 1);
+      }
+    }
+  };
+  walk(root, 0);
+  return best;
+}
 
 export function formatNumber(value, digits = 1) {
   if (!Number.isFinite(value)) return 'n/a';
