@@ -30,6 +30,19 @@ node scripts/install.mjs --uninstall
 
 Restart Qoder afterwards: the plugin registry is reconciled once at startup.
 
+## Iterating without reinstalling
+
+`install.mjs` copies a snapshot into `plugins/cache/local/` and records the
+checkout path in `SOURCE`. After editing, either re-run the installer, or point
+the wrapper at the live checkout:
+
+```bash
+set TOKEN_STATS_SOURCE=D:\test\qoder-plugin\token-stats
+```
+
+With that set, `bin/token-stats.cmd` runs `runtime/*.mjs` from the checkout
+instead of the installed copy. Unset it before relying on the hook in real use.
+
 ## How the numbers are derived
 
 Qoder appends structured events to

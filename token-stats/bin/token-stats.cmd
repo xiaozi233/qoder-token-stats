@@ -3,12 +3,18 @@ setlocal enabledelayedexpansion
 for %%I in ("%~dp0..") do set "plugin_root=%%~fI"
 
 set "cmd_name=%~1"
-if "%cmd_name%"=="stop-stats" set "script=!plugin_root!\runtime\stop-stats.mjs"
-if "%cmd_name%"=="token-stats" set "script=!plugin_root!\runtime\token-stats.mjs"
-if not defined script (
+if "%cmd_name%"=="stop-stats" set "script_name=stop-stats.mjs"
+if "%cmd_name%"=="token-stats" set "script_name=token-stats.mjs"
+if not defined script_name (
   >&2 echo token-stats: unknown command "%~1" ^(expected stop-stats ^| token-stats^)
   exit /b 2
 )
+shift
+
+rem Set TOKEN_STATS_SOURCE to a working checkout to run its runtime/*.mjs
+rem directly, so edits take effect without reinstalling. Development only.
+set "script=!plugin_root!\runtime\!script_name!"
+if defined TOKEN_STATS_SOURCE set "script=!TOKEN_STATS_SOURCE!\runtime\!script_name!"
 
 set "runtime="
 set "run_as_node="
@@ -33,7 +39,6 @@ if defined runtime (
   set "runtime=node.exe"
 )
 
-shift
 if "!run_as_node!"=="1" (set "ELECTRON_RUN_AS_NODE=1") else (set "ELECTRON_RUN_AS_NODE=")
 "!runtime!" "!script!" %*
 exit /b !errorlevel!

@@ -60,6 +60,7 @@ if (process.argv.includes('--uninstall')) {
 }
 
 copyDir(source, installPath);
+fs.writeFileSync(path.join(installPath, 'SOURCE'), `${source}\n`, 'utf8');
 
 const registry = readJson(registryFile, { version: 2, plugins: {} });
 registry.version = registry.version || 2;

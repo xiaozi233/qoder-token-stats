@@ -53,6 +53,10 @@ if (args.json) {
 }
 
 const selected = stats.turns.slice(-Math.max(1, args.turns));
+if (selected.length === 0) {
+  process.stdout.write(`session ${stats.sessionId}: 尚无已完成的对话轮次\n`);
+  process.exit(0);
+}
 const lines = selected.map((t) => formatStatsLine({ turn: t }));
 const header = `session ${stats.sessionId}`;
 const totals = stats.session;
