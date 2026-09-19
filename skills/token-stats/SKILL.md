@@ -63,16 +63,21 @@ Wall-clock time is longer than `生成` because tool execution and permission
 prompts are excluded. Segments under 200 ms are dropped as bookkeeping artefacts
 rather than counted as generation.
 
-## Token totals are estimated (for now)
+## Token counts are real only with QODERCN_EXPOSE_TOKEN_USAGE
 
-The gateway does return usage; Qoder zeroes it before writing the session log unless the
-provider is a BYOK `custom` one. Set `QODERCN_EXPOSE_TOKEN_USAGE=1` in the
-environment before launching Qoder and real numbers start appearing in
-`model.response.completed`. This plugin detects them automatically, drops the `~`
-prefix, and reports the true value — no configuration on its side.
+Qoder receives real usage from the gateway but zeroes it before writing the
+session log, unless the provider is a BYOK `custom` one. Setting
+`QODERCN_EXPOSE_TOKEN_USAGE=1` in the environment before Qoder launches makes the
+true numbers appear in `model.response.completed`; this plugin then detects them,
+drops the `~` prefix and reports the real value — nothing to configure here.
+Verified 2026-09-20: with the flag on, `tokenSource` flipped to `reported` and one
+turn showed 976 real output tokens against 565 from the character heuristic, so
+estimates undercount by roughly 42% and a `~` number is a floor, not a
+measurement.
 
-Until then numbers are counted from transcript text (CJK characters ≈ 1 token each,
-latin runs ≈ 1 token per word) and carry a `~` prefix.
+Without the flag, numbers are counted from transcript text (CJK characters ≈ 1
+token each, latin runs ≈ 1 word each) and carry a `~` prefix. Say which of the two
+you are quoting when the difference matters.
 
 `首字` is likewise an upper bound: Qoder logs no first-token event, so this is
 turn start → first tool call or completed response, not a measured TTFT.
