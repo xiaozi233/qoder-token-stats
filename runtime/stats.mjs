@@ -336,14 +336,6 @@ export function formatNumber(value, digits = 1) {
   return NUM.format(Number(value.toFixed(digits)));
 }
 
-export function formatCompact(value) {
-  if (!Number.isFinite(value)) return 'n/a';
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 10_000) return `${Math.round(value / 1000)}k`;
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return String(Math.round(value));
-}
-
 export function formatStatsLine(stats) {
   const t = stats.turn;
   if (!t) return null;
@@ -362,10 +354,8 @@ export function formatStatsLine(stats) {
 export function formatTurnLine(stats) {
   const line = formatStatsLine(stats);
   if (!line) return null;
-  const s = stats.session;
+  // No session cumulative here: it would blend pre-flag estimated turns with
+  // post-flag reported ones behind a single number.
   const at = new Date(stats.turn.lastEventAt || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
-  const parts = [line];
-  if (s && s.tokens > 0) parts.push(`累计 ${formatCompact(s.tokens)} tok / ${s.turnCount} 轮`);
-  parts.push(`⏱ ${at}`);
-  return parts.join(' · ');
+  return `${line} · ⏱ ${at}`;
 }

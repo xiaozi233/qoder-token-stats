@@ -115,10 +115,11 @@ if (selected.length === 0) {
 }
 const lines = selected.map((t) => formatStatsLine({ turn: t }));
 const totals = stats.session;
-const footer = `会话累计 ${formatNumber(totals.rate)} tok/s · ~${Math.round(totals.tokens)} tok / ${formatNumber(totals.genSeconds)}s · ${totals.segments} 段 / 峰 ${formatNumber(totals.peakRate)} · ${totals.turnCount} 轮`;
+const mark = totals.tokenSource === 'estimated' ? '~' : '';
+const footer = `会话累计 ${formatNumber(totals.rate)} tok/s · ${mark}${Math.round(totals.tokens)} tok / ${formatNumber(totals.genSeconds)}s · ${totals.segments} 段 / 峰 ${formatNumber(totals.peakRate)} · ${totals.turnCount} 轮`;
 const source =
   totals.tokenSource === 'estimated'
-    ? 'token 来源: 估算（服务端 usage 返回 0）；~ 前缀表示估算值'
+    ? 'token 来源: 估算（Qoder 未开 QODERCN_EXPOSE_TOKEN_USAGE，日志里 usage 被清零）；~ 前缀表示估算值'
     : 'token 来源: 服务端上报';
 
 process.stdout.write([`session ${stats.sessionId}`, ...lines, footer, source, ''].join('\n'));

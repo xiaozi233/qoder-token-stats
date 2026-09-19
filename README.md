@@ -6,9 +6,12 @@ A Qoder plugin that reports per-turn token throughput after every reply, in the
 same shape as the app's status line:
 
 ```
-⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 3,389 tok / 生成 60.6s · 45 段 / 峰 84.6
-会话累计 27.8 tok/s · ~14,868 tok / 533.1s · 78 段 / 峰 60.9 · 3 轮
+⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 3,389 tok / 生成 60.6s · 45 段 / 峰 84.6 · ⏱ 19:24:51
 ```
+
+No session cumulative figure on this line: across a flag flip it would add estimated
+tokens to reported ones and present the mix as one number. `token-stats --session
+<id>` still prints 会话累计 for an explicit query.
 
 ## Quick start
 
