@@ -69,23 +69,34 @@ try {
 }
 
 if (!disabled) {
-  try {
-    fs.writeFileSync(
-      stateFile(),
+  // Qoder fires UserPromptSubmit for its background sub-sessions too (recap
+  // generation, memory extraction), and those prompts arrive *after* the real
+  // user turn — so an unguarded hook lets a sub-session overwrite the state and
+  // --current then finds no turn at all. A sub-session has no transcript file.
+  const isRealSession = Boolean(payload.transcript_path) && fs.existsSync(payload.transcript_path);
+  if (isRealSession) {
+    try {
+      fs.writeFileSync(
+        stateFile(),
+        JSON.stringify({
+          sessionId: payload.session_id || null,
+          promptAt: Date.now(),
+          cwd: payload.cwd || process.cwd(),
+        }),
+      );
+    } catch {
+      /* a missing state file only costs the --current guard, not the turn */
+    }
+    process.stdout.write(
       JSON.stringify({
-        sessionId: payload.session_id || null,
-        promptAt: Date.now(),
-        cwd: payload.cwd || process.cwd(),
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: INSTRUCTION },
       }),
     );
-  } catch {
-    /* a missing state file only costs the --current guard, not the turn */
+    process.exit(0);
   }
 }
 
 process.stdout.write(
-  JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: disabled ? '' : INSTRUCTION },
-  }),
+  JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: '' } }),
 );
 process.exit(0);
