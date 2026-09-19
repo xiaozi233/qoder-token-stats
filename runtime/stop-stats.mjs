@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { computeStats, formatStatsLine, formatNumber, newestSession, qoderHome } from './stats.mjs';
+import { computeStats, formatStatsLine, formatNumber, recentSessions, qoderHome } from './stats.mjs';
 
 async function readStdin() {
   let raw = '';
@@ -49,8 +49,13 @@ try {
 // TODO(token-stats): temporary payload capture while the Stop contract is unknown.
 fs.writeFileSync(path.join(dataDir(), 'last-payload.json'), raw || '<empty stdin>', 'utf8');
 
-const sessionId = payload.session_id || payload.sessionId || process.env.QODER_SESSION_ID || newestSession(qoderHome());
-const stats = computeStats({ sessionId, cwd: payload.cwd || process.cwd() });
+const cwd = payload.cwd || process.cwd();
+// Without session_id the hook cannot know which session ended, and the newest
+// session on disk is often a Qoder background sub-session. Report the gap
+// instead of attributing someone else's turn.
+const sessionId =
+  payload.session_id || payload.sessionId || recentSessions(qoderHome(), cwd, 1)[0]?.sessionId;
+const stats = computeStats({ sessionId, cwd });
 
 if (stats.error) {
   process.stdout.write(`${JSON.stringify({ systemMessage: `token-stats: ${stats.error}` })}\n`);

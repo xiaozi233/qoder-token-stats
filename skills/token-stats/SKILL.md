@@ -18,18 +18,26 @@ events into the same line the app shows in its status bar:
    if it is unset, locate the plugin under `~/.qoder-cn/plugins/cache/`.
 
    ```bash
-   node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" "$PWD"
+   node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --session <id> "$PWD"
    ```
 
-   Useful flags:
+   Flags:
+   - `--session <id>` — required
    - `--turns N` — last N turns instead of only the newest one
    - `--json` — full machine-readable breakdown per turn
-   - `--session <id>` — a specific session
 
-   Omit `--session` for "本轮": with none given the CLI picks the most recently
-   active session. Do **not** write `--session "$QODER_SESSION_ID"` — that
-   variable is not exported to hook or tool shells, so it silently expands to
-   empty and the run falls back to session-log discovery anyway.
+   To find the current session id, read the newest `history.jsonl` entry the Stop
+   hook wrote, or run the CLI with a wrong id and it will list the project's most
+   recent sessions with turn counts:
+
+   ```bash
+   node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" "$PWD"     # exits 2, prints candidates
+   ```
+
+   Never derive the session from "most recently modified" alone, and never use
+   `$QODER_SESSION_ID` — it is not exported to hook or tool shells. Qoder runs
+   background sub-sessions (recap generation, memory extraction) in the same
+   project directory, and they are frequently newer than the real one.
 
    On Windows the same entry point is `bin/token-stats.cmd token-stats <flags>`.
 

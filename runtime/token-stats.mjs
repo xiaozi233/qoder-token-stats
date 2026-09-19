@@ -6,7 +6,7 @@
 //   token-stats.mjs --json                machine readable
 
 import process from 'node:process';
-import { computeStats, formatStatsLine, formatNumber, newestSession, qoderHome } from './stats.mjs';
+import { computeStats, formatStatsLine, formatNumber, recentSessions, qoderHome } from './stats.mjs';
 
 function parseArgs(argv) {
   const out = { turns: 1 };
@@ -36,12 +36,26 @@ if (args.help) {
   process.exit(0);
 }
 
-const sessionId = args.sessionId || process.env.QODER_SESSION_ID || newestSession(qoderHome());
-if (!sessionId) {
-  process.stderr.write('token-stats: no session log found\n');
-  process.exit(1);
+const cwd = args.cwd || process.cwd();
+if (!args.sessionId) {
+  // Qoder runs background sub-sessions (recap, memory extraction) alongside the
+  // real one in the same project directory, so "most recently modified" is not
+  // the current session. Refuse to guess rather than report someone else's turn.
+  const candidates = recentSessions(qoderHome(), cwd);
+  process.stderr.write(
+    [
+      'token-stats: --session is required; this project has several sessions and Qoder',
+      'also runs background sub-sessions here, so the newest one is not necessarily yours.',
+      'Most recent:',
+      ...candidates.map(
+        (c) => `  ${c.sessionId}  ${new Date(c.mtime).toISOString()}  ${c.turns} turns / ${c.segments} segments${c.transcript ? '' : '  (no transcript — background sub-session)'}`,
+      ),
+      '',
+    ].join('\n'),
+  );
+  process.exit(2);
 }
-const stats = computeStats({ sessionId, cwd: args.cwd || process.cwd() });
+const stats = computeStats({ sessionId: args.sessionId, cwd });
 if (stats.error) {
   process.stderr.write(`token-stats: ${stats.error}\n`);
   process.exit(1);

@@ -29,7 +29,13 @@ function blockText(block) {
 }
 
 function sanitizeProject(dir) {
-  return dir.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  // Qoder replaces each separator run with a single dash but keeps the path's
+  // own dashes, so `D:\test\x` becomes `D--test-x`, not `D-test-x`.
+  return String(dir)
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .join('-')
+    .replace(/[^A-Za-z0-9._-]+/g, '-');
 }
 
 function readJsonl(file) {
@@ -279,25 +285,33 @@ function findTranscript(home, sessionId, cwd) {
 
 const NUM = new Intl.NumberFormat('en-US');
 
-export function newestSession(home) {
+export function recentSessions(home, cwd, limit = 5) {
   const root = path.join(home, 'logs', 'sessions');
-  if (!fs.existsSync(root)) return null;
-  let best = null;
-  const walk = (dir, depth) => {
-    if (depth > 2) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const full = path.join(dir, entry.name);
-      if (depth === 1 && fs.existsSync(path.join(full, 'segments'))) {
-        const stat = fs.statSync(full);
-        if (!best || stat.mtimeMs > best.mtimeMs) best = entry.name;
-      } else {
-        walk(full, depth + 1);
-      }
-    }
-  };
-  walk(root, 0);
-  return best;
+  if (!fs.existsSync(root)) return [];
+  const scoped = cwd && fs.existsSync(path.join(root, sanitizeProject(cwd)))
+    ? path.join(root, sanitizeProject(cwd))
+    : root;
+  if (!fs.existsSync(scoped)) return [];
+  const out = [];
+  for (const entry of fs.readdirSync(scoped, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(scoped, entry.name);
+    if (!fs.existsSync(path.join(dir, 'segments'))) continue;
+    const stat = fs.statSync(dir);
+    const { turns } = computeStats({ home, sessionId: entry.name, cwd }) || {};
+    out.push({
+      sessionId: entry.name,
+      mtime: stat.mtimeMs,
+      turns: turns?.length || 0,
+      segments: turns?.reduce((acc, t) => acc + t.segments, 0) || 0,
+      transcript: Boolean(findTranscript(home, entry.name, cwd)),
+    });
+  }
+  // Real user sessions own a transcript; Qoder's background sub-sessions do not,
+  // and they are usually the most recently touched. Rank transcripts first.
+  return out
+    .sort((a, b) => Number(b.transcript) - Number(a.transcript) || b.mtime - a.mtime)
+    .slice(0, limit);
 }
 
 export function formatNumber(value, digits = 1) {
