@@ -1,6 +1,25 @@
 {
-  "description": "Print token throughput statistics when a turn finishes",
+  "description": "token-stats: measure the turn at Stop, and instruct the model to quote it",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "async": false,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd.exe",
+            "args": [
+              "/d",
+              "/c",
+              "${QODER_PLUGIN_ROOT}/bin/token-stats.cmd",
+              "prompt-submit"
+            ],
+            "name": "token-stats-prompt-submit",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "async": false,
@@ -15,7 +34,7 @@
               "stop-stats"
             ],
             "name": "token-stats-stop",
-            "timeout": 10
+            "timeout": 8
           }
         ]
       }

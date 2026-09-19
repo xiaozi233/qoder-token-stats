@@ -5,69 +5,82 @@ description: Report Qoder token throughput (tok/s, first-token latency, output t
 
 # Token throughput report
 
-Qoder writes a fine-grained event log for every session. This skill turns those
-events into the same line the app shows in its status bar:
+Qoder writes a fine-grained event log for every session, flushed live as each
+model segment completes. This turns those events into the line the app shows in
+its status bar:
 
 ```
 ⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 3,389 tok / 生成 60.6s · 45 段 / 峰 84.6
 ```
 
-## Workflow
+## Showing the line at the end of an answer
 
-1. Run the bundled CLI. `${QODER_PLUGIN_ROOT}` is this plugin's install directory;
-   if it is unset, locate the plugin under `~/.qoder-cn/plugins/cache/`.
+The `UserPromptSubmit` hook injects an instruction telling you to do this. Follow
+it: after all other work, just before your final summary, run
 
-   ```bash
-   node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --session <id> "$PWD"
-   ```
+```bash
+node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --current
+```
 
-   Flags:
-   - `--session <id>` — required
-   - `--turns N` — last N turns instead of only the newest one
-   - `--json` — full machine-readable breakdown per turn
+and paste whatever it prints, verbatim, inside a Markdown blockquote at the very
+end of your reply. **If it prints nothing, show nothing** — do not fall back to
+an older turn, do not estimate the numbers yourself, and do not call extra tools
+just to produce a line.
 
-   To find the current session id, read the newest `history.jsonl` entry the Stop
-   hook wrote, or run the CLI with a wrong id and it will list the project's most
-   recent sessions with turn counts:
+`--current` reads the timestamp the hook wrote when this turn began and only
+reports a turn that started at or after it, so a previous turn can never be
+presented as the current one.
 
-   ```bash
-   node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" "$PWD"     # exits 2, prints candidates
-   ```
+## Querying history
 
-   Never derive the session from "most recently modified" alone, and never use
-   `$QODER_SESSION_ID` — it is not exported to hook or tool shells. Qoder runs
-   background sub-sessions (recap generation, memory extraction) in the same
-   project directory, and they are frequently newer than the real one.
+```bash
+node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --session <id> "$PWD"
+```
 
-   On Windows the same entry point is `bin/token-stats.cmd token-stats <flags>`.
+- `--session <id>` — required unless `--current` is used
+- `--turns N` — last N turns instead of only the newest
+- `--json` — full machine-readable breakdown per turn
 
-2. Report the printed line verbatim, then the 会话累计 line.
+Run it without `--session` to list the project's recent sessions and turn counts
+(exits 2). Do not infer the session from "most recently modified": Qoder runs
+background sub-sessions (recap generation, memory extraction) in the same project
+directory that are frequently newer than the real one and own no transcript.
+`$QODER_SESSION_ID` is not exported to hook or tool shells either.
 
-3. State the token source. The gateway currently returns `output_tokens = 0`, so
-   numbers carry a `~` prefix and are estimated from transcript text (CJK
-   characters ≈ 1 token each, latin runs ≈ 1 token per word). Once real usage is
-   reported the `~` disappears automatically and the reported value wins.
+On Windows the same entry point is `bin/token-stats.cmd token-stats <flags>`.
 
 ## What each field measures
 
 | Field | Source |
 | --- | --- |
-| `tok/s(本轮)` | tokens ÷ summed model-request time for the newest turn |
+| `tok/s(本轮)` | tokens ÷ summed model-request time for the turn |
 | `首字` | turn start → first `tool.requested` / `model.response.completed` |
 | `输出 tok` | transcript assistant text + thinking + tool arguments |
 | `生成` | sum of `model.request.started` → `model.response.completed` gaps |
-| `段` | number of completed model requests in the turn |
-| `峰` | highest per-segment rate among those requests |
+| `段` / `峰` | completed model requests in the turn, and the fastest one; omitted for single-segment turns |
 
-Wall-clock time of the turn is longer than `生成` because tool execution and
-permission prompts are excluded from generation seconds.
+Wall-clock time is longer than `生成` because tool execution and permission
+prompts are excluded. Segments under 200 ms are dropped as bookkeeping artefacts
+rather than counted as generation.
+
+## Token totals are estimated
+
+The gateway reports `output_tokens = 0` on every `model.response.completed`, and
+`~/.qoder-cn` holds no usage database the way ZCode's `model_usage` table does.
+Numbers are therefore counted from transcript text — CJK characters ≈ 1 token
+each, latin runs ≈ 1 token per word — and carry a `~` prefix. If the gateway
+starts reporting real usage, the reported value wins automatically and the `~`
+disappears; no configuration is involved.
+
+`首字` is likewise an upper bound: Qoder logs no first-token event, so this is
+turn start → first tool call or completed response, not a measured TTFT.
 
 ## Data locations
 
 - events: `~/.qoder-cn/logs/sessions/<project>/<session>/segments/*.jsonl`
 - transcript: `~/.qoder-cn/projects/<project>/<session>.jsonl`
-- archived hook output: `~/.qoder-cn/plugins/data/token-stats-*/{history.jsonl,latest.md}`
+- hook archive: `~/.qoder-cn/plugins/data/token-stats-*/{history.jsonl,latest.md,latest.json,state.json}`
 
 The data directory is `$QODER_PLUGIN_DATA`, which Qoder names
-`<plugin name>-<marketplace>` — for this plugin that is `token-stats-local`, not
-`token-stats`. Glob it rather than hard-coding.
+`<plugin name>-<marketplace>` — here `token-stats-local`, not `token-stats`. Glob
+it rather than hard-coding.

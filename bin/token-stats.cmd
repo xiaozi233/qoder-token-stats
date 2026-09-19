@@ -4,9 +4,10 @@ for %%I in ("%~dp0..") do set "plugin_root=%%~fI"
 
 set "cmd_name=%~1"
 if "%cmd_name%"=="stop-stats" set "script_name=stop-stats.mjs"
+if "%cmd_name%"=="prompt-submit" set "script_name=prompt-submit.mjs"
 if "%cmd_name%"=="token-stats" set "script_name=token-stats.mjs"
 if not defined script_name (
-  >&2 echo token-stats: unknown command "%~1" ^(expected stop-stats ^| token-stats^)
+  >&2 echo token-stats: unknown command "%~1" ^(expected stop-stats ^| prompt-submit ^| token-stats^)
   exit /b 2
 )
 shift

@@ -28,8 +28,9 @@ node scripts/install.mjs        # 注册到 ~/.qoder-cn，两个配置文件都�
 | `hooks/hooks.json` | 注册 `Stop` 钩子 |
 | `bin/token-stats.cmd` | Windows 包装脚本，先解析 JS 运行时再执行 `runtime/*.mjs` |
 | `runtime/stats.mjs` | 解析 Qoder 会话日志、计算各项指标 |
-| `runtime/stop-stats.mjs` | Stop 钩子入口 |
-| `runtime/token-stats.mjs` | 按需查询的 CLI |
+| `runtime/prompt-submit.mjs` | `UserPromptSubmit` 钩子：给本轮打时间戳，并注入显示指令 |
+| `runtime/stop-stats.mjs` | `Stop` 钩子：归档本轮统计行 |
+| `runtime/token-stats.mjs` | CLI（`--current` 给模型收尾用，`--session` 查历史） |
 | `skills/token-stats/SKILL.md` | 教会 agent 怎么跑、怎么解释这些数字 |
 | `scripts/install.mjs` | 写入用户插件注册表（改前留 `.bak` 备份） |
 
@@ -81,23 +82,30 @@ Qoder 会把结构化事件追加到 `~/.qoder-cn/logs/sessions/<项目>/<会话
 `首字` 同理：Qoder 并不记录「首 token」事件，取的是「轮开始 → 第一次工具调用或整段响应完成」，
 所以它是首字耗时的**上界**，不是实测值。
 
-## 钩子输出格式
+## 统计行是怎么显示出来的
 
-`Stop` 钩子每轮确实会触发（`exit_code=0`，约 250ms），但它的 stdout 被包装成 SDK 流上的
-`system/hook_response` 消息，当前 Qoder 版本不会把它渲染到对话里，所以那行统计**不会内联显示**。
-
-稳定可见的是钩子同时写下的文件：
+Qoder 插件没有 UI 扩展点，而 `Stop` 钩子的 stdout 会被包成 SDK 的 `hook_response` 消息，
+客户端并不渲染。所以那行可见的文字是**让模型自己打出来的**：
 
 ```
-~/.qoder-cn/plugins/data/token-stats-local/latest.md       # 每轮重写
-~/.qoder-cn/plugins/data/token-stats-local/history.jsonl   # 每轮追加一条
+UserPromptSubmit ──写入 state.json──┐
+                                    └─additionalContext：「收尾时运行 --current，
+                                       把输出原样引用到回复末尾」
+模型做完工具 → 运行 token-stats --current → 用引用块贴出这一行
+Stop          → 把同一行归档到 history.jsonl / latest.md
 ```
 
-数据目录就是 `$QODER_PLUGIN_DATA`，Qoder 按 `<插件名>-<marketplace>` 命名，所以带
-`-local` 后缀。想看数字可以直接问 agent（走 `token-stats` skill），或者读 `latest.md`。
+`--current` 只报告「起始时间不早于 UserPromptSubmit 写入的时间戳」的轮次，所以绝不会
+把上一轮的数字当本轮显示；没有符合条件的轮次时它不输出任何内容，回复里也就不出现统计行。
 
-`stop-stats.mjs` 默认输出 `{"systemMessage": "..."}`，加 `--text` 输出纯文本；目前两种都不渲染，
-所以文件才是唯一可靠来源。
+这套设计直接来自 [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor)——
+它面对的是同一个「钩子画不了 UI」的问题，用的是同一个解法。
+
+`Stop` 钩子仍是可靠的归档来源：它从 payload 里读 `session_id`、`transcript_path` 和
+`parent_business_info.begin_at` 来锁定刚结束的那一轮，写出 `history.jsonl`、`latest.md`、
+`latest.json`。
+
+关闭注入：在 `~/.qoder-cn/token-stats.config.json` 写入 `{ "tokenRateLine": false }`。
 
 ## 实测数据
 
@@ -111,11 +119,13 @@ Qoder 会把结构化事件追加到 `~/.qoder-cn/logs/sessions/<项目>/<会话
 
 ## 已知限制
 
-- **做不了常驻状态栏。** Qoder 插件只能提供 hooks、MCP server 和 skill 三类扩展，没有 UI 扩展点，
-  所以最终形态是「每轮结束时打印一条 + 可查询的历史日志」，不是实时计数器。
-- **代码密集的轮次估算会偏。** 分词器对标点、缩进、标识符的计法和这里的词数启发式差别较大。
-- **只在 Windows 上验证过。** `bin/token-stats.cmd` 是批处理脚本；`runtime/*.mjs` 本身跨平台，
-  但钩子需要一个对应的 POSIX 包装。
+- **统计行依赖模型配合。** 那是一串注入指令，不是渲染出来的控件——模型忽略它，这一行就不出现。
+  Qoder 插件只能提供 hooks、MCP server 和 skill，没有 UI 扩展点，插件内部无法绘制常驻控件。
+- **token 总量是估算值。** 网关在每条 `model.response.completed` 上返回 `output_tokens = 0`，
+  且 `~/.qoder-cn` 下没有 usage 数据库（对比 ZCode：它的 `model_usage` 表逐条存了真实的
+  `output_tokens`、`reasoning_tokens` 与 `time_to_first_token_ms`，所以那边能出真值）。
+  代码密集的轮次估算会偏——分词器对标点、缩进、标识符的计法与这里的词数启发式差别较大。
+- **`首字` 是上界。** Qoder 不记录首 token 事件，取的是「轮开始 → 首次工具调用或整段响应完成」。
 
 ## 许可证
 

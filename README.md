@@ -29,8 +29,9 @@ lets the agent answer "本轮多少 tok/s".
 | `hooks/hooks.json` | registers the `Stop` hook |
 | `bin/token-stats.cmd` | Windows wrapper, resolves a JS runtime then runs `runtime/*.mjs` |
 | `runtime/stats.mjs` | parses Qoder session logs, computes the metrics |
-| `runtime/stop-stats.mjs` | Stop hook entry point |
-| `runtime/token-stats.mjs` | CLI for on-demand queries |
+| `runtime/prompt-submit.mjs` | `UserPromptSubmit` hook: timestamps the turn and injects the display instruction |
+| `runtime/stop-stats.mjs` | `Stop` hook: archives the finished turn's line |
+| `runtime/token-stats.mjs` | CLI (`--current` for the model, `--session` for history) |
 | `skills/token-stats/SKILL.md` | teaches the agent to run and explain the numbers |
 | `scripts/install.mjs` | writes the user plugin registry (with `.bak` backups) |
 
@@ -78,26 +79,38 @@ disappears — no configuration needed.
 event. Qoder does not log a first-token event, so this is an upper bound on
 time-to-first-token, not a measured one.
 
+## How the line gets displayed
+
+Qoder plugins have no UI extension point, and a `Stop` hook's stdout is forwarded
+as an SDK `hook_response` that the client does not render. So the visible line is
+produced by the model instead:
+
+```
+UserPromptSubmit ──writes state.json──┐
+                                      └─additionalContext: "run --current at the
+                                         end of your answer and quote the output"
+Model finishes tools → runs token-stats --current → pastes the line in a blockquote
+Stop                 → archives the same line to history.jsonl / latest.md
+```
+
+`--current` only reports a turn that started at or after the timestamp
+`UserPromptSubmit` wrote, so a previous turn can never be presented as the
+current one — if nothing qualifies, it prints nothing and no line is shown.
+This design is taken from [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor),
+which solves the same "hooks cannot paint UI" problem the same way.
+
+The `Stop` hook is still the durable record: it reads `session_id`,
+`transcript_path` and `parent_business_info.begin_at` from its payload to pin down
+the finished turn, and writes `history.jsonl`, `latest.md` and `latest.json`.
+
 ## Hook output
 
-The `Stop` hook does fire after every turn (`exit_code=0`, ~250 ms), but its
-stdout is forwarded as a `system/hook_response` message on the SDK stream and
-this Qoder build does not render it in the chat. So the line is not visible
-inline.
+`stop-stats.mjs` writes plain text to stdout and archives unconditionally. Disable
+the injected instruction with `~/.qoder-cn/token-stats.config.json`:
 
-What is reliably visible is the file the hook also writes:
-
+```json
+{ "tokenRateLine": false }
 ```
-~/.qoder-cn/plugins/data/token-stats-local/latest.md   # rewritten every turn
-~/.qoder-cn/plugins/data/token-stats-local/history.jsonl  # appended, one entry per turn
-```
-
-The data directory is `$QODER_PLUGIN_DATA`, which Qoder names
-`<plugin>-<marketplace>` — hence the `-local` suffix. Ask the agent for the
-numbers via the `token-stats` skill, or read `latest.md`.
-
-`stop-stats.mjs` emits `{"systemMessage": "..."}` by default and plain text with
-`--text`; neither is rendered today, so the file remains the source of truth.
 
 ## Verified
 
@@ -112,11 +125,16 @@ Bedrock-modding sessions:
 
 ## Known limits
 
-- No persistent status bar. Qoder plugins expose hooks, MCP servers and skills
-  only — there is no UI extension point, so this renders as a turn-end message
-  plus a queryable log, not a live counter.
-- Estimates drift for code-heavy turns, where tokenizers cost punctuation and
-  indentation differently than the word-count heuristic used here.
+- **The line depends on the model cooperating.** It is an injected instruction,
+  not a rendered widget — a model that ignores it shows nothing. Qoder plugins
+  expose hooks, MCP servers and skills only, with no UI extension point, so there
+  is no way to paint a persistent bar from inside the plugin.
+- **Token totals are estimates.** The gateway reports `output_tokens = 0` and
+  `~/.qoder-cn` keeps no usage database (unlike ZCode's `model_usage` table, which
+  stores real `output_tokens`, `reasoning_tokens` and `time_to_first_token_ms` per
+  request). Estimates drift for code-heavy turns, where tokenizers cost punctuation
+  and indentation differently than the word-count heuristic used here.
+- **`首字` is an upper bound.** Qoder logs no first-token event.
 
 ## License
 

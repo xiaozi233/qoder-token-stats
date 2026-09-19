@@ -1,76 +1,112 @@
-// Stop hook: print the per-turn throughput line and archive it to the plugin data dir.
+// Stop hook: the turn has just finished, so its events are all on disk.
+// Archives the per-turn throughput line for the dashboard/overlay and reports it
+// on stdout. Qoder forwards Stop stdout as an SDK `hook_response` rather than
+// rendering it, so the visible copy is produced by the UserPromptSubmit
+// instruction — this hook is the durable record.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { computeStats, formatStatsLine, formatNumber, recentSessions, qoderHome } from './stats.mjs';
+import { computeStats, formatTurnLine } from './stats.mjs';
 
-async function readStdin() {
-  let raw = '';
-  process.stdin.setEncoding('utf8');
-  for await (const chunk of process.stdin) raw += chunk;
-  return raw;
+function readStdin() {
+  return new Promise((resolve) => {
+    let raw = '';
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve(raw);
+    };
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => (raw += c));
+    process.stdin.on('end', finish);
+    // A client that never closes stdin must not stall the turn.
+    setTimeout(finish, 1500);
+  });
 }
 
 function dataDir() {
   const fromEnv = process.env.QODER_PLUGIN_DATA || process.env.CLAUDE_PLUGIN_DATA;
-  const dir = fromEnv || path.join(qoderHome(), 'plugins', 'data', 'token-stats');
+  const dir = fromEnv || path.join(qoderHomeFallback(), 'plugins', 'data', 'token-stats-local');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function record(stats, line) {
-  const dir = dataDir();
+function qoderHomeFallback() {
+  return process.env.QODER_HOME || path.join(process.env.USERPROFILE || process.env.HOME || '', '.qoder-cn');
+}
+
+function record(stats, line, dir) {
   const entry = { at: new Date().toISOString(), sessionId: stats.sessionId, line, ...stats.turn };
   fs.appendFileSync(path.join(dir, 'history.jsonl'), `${JSON.stringify(entry)}\n`, 'utf8');
   const s = stats.session;
   fs.writeFileSync(
     path.join(dir, 'latest.md'),
-    [
-      `# ${line}`,
-      '',
-      `- session: \`${stats.sessionId}\``,
-      `- 会话累计: ${formatNumber(s.rate)} tok/s · ~${Math.round(s.tokens)} tok / ${formatNumber(s.genSeconds)}s · ${s.segments} 段 / 峰 ${formatNumber(s.peakRate)} · ${s.turnCount} 轮`,
-      `- token 来源: ${stats.turn.tokenSource === 'estimated' ? '估算（服务端 usage 为 0）' : '服务端上报'}`,
-      '',
-    ].join('\n'),
+    `# ${line}\n\n- session: \`${stats.sessionId}\`\n- turn: \`${stats.turn.turnId}\`\n- token 来源: ${
+      stats.turn.tokenSource === 'estimated' ? '估算（服务端 usage 为 0）' : '服务端上报'
+    }\n`,
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(dir, 'latest.json'),
+    JSON.stringify({ at: entry.at, sessionId: stats.sessionId, turnId: stats.turn.turnId, line, turn: stats.turn, session: s }),
     'utf8',
   );
 }
 
-const raw = await readStdin();
+function readJsonLines(file) {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      /* partially flushed final line */
+    }
+  }
+  return out;
+}
+
+// The Stop payload has no turn_id. It does carry `parent_request_set_id`, which is
+// the transcript's own id for the user prompt that opened this turn, plus
+// `parent_business_info.begin_at` — together they pin down which turn just ended.
+function turnStartMs(payload) {
+  const beginAt = Number(payload.parent_business_info?.begin_at);
+  const entries = readJsonLines(payload.transcript_path);
+  const prompt = entries.find((e) => e.requestSetId === payload.parent_request_set_id);
+  const stamped = Date.parse(prompt?.timestamp || prompt?.ts || '');
+  const candidates = [beginAt, Number.isFinite(stamped) ? stamped : NaN].filter(Number.isFinite);
+  return candidates.length ? Math.min(...candidates) : NaN;
+}
+
 let payload = {};
 try {
-  payload = JSON.parse(raw) || {};
+  payload = JSON.parse((await readStdin()) || '{}') || {};
 } catch {
-  // The hook payload is not documented as stable, so fall back to the newest
-  // session on disk rather than reporting nothing.
+  payload = {};
 }
 
-// TODO(token-stats): temporary payload capture while the Stop contract is unknown.
-fs.writeFileSync(path.join(dataDir(), 'last-payload.json'), raw || '<empty stdin>', 'utf8');
+// Re-entrancy guard: while a Stop hook is being handled the client may stop again.
+if (payload.stop_hook_active) process.exit(0);
 
-const cwd = payload.cwd || process.cwd();
-// Without session_id the hook cannot know which session ended, and the newest
-// session on disk is often a Qoder background sub-session. Report the gap
-// instead of attributing someone else's turn.
-const sessionId =
-  payload.session_id || payload.sessionId || recentSessions(qoderHome(), cwd, 1)[0]?.sessionId;
-const stats = computeStats({ sessionId, cwd });
+const dir = dataDir();
+const stats = computeStats({
+  home: qoderHomeFallback(),
+  sessionId: payload.session_id,
+  transcriptPath: payload.transcript_path,
+  cwd: payload.cwd,
+  afterMs: turnStartMs(payload),
+});
 
-if (stats.error) {
-  process.stdout.write(`${JSON.stringify({ systemMessage: `token-stats: ${stats.error}` })}\n`);
-  process.exit(0);
-}
+if (stats.error || !stats.turn || !stats.turn.tokens) process.exit(0);
 
-const line = formatStatsLine(stats);
-if (line) record(stats, line);
-
-const session = stats.session;
-const tail = `会话累计 ${formatNumber(session.rate)} tok/s · ~${Math.round(session.tokens)} tok / ${formatNumber(session.genSeconds)}s · ${session.segments} 段 / 峰 ${formatNumber(session.peakRate)} · ${session.turnCount} 轮`;
-const text = line ? `${line}\n${tail}` : 'token-stats: 本轮无可统计的模型请求';
-
-if (process.argv.includes('--text')) {
-  process.stdout.write(`${text}\n`);
-} else {
-  process.stdout.write(`${JSON.stringify({ systemMessage: text })}\n`);
-}
+const line = formatTurnLine(stats);
+record(stats, line, dir);
+process.stdout.write(`${line}\n`);
+process.exit(0);

@@ -8,6 +8,7 @@ import path from 'node:path';
 const CJK_ALL =
   /[　-〿぀-ヿ㐀-䶿一-鿿가-힯🀀-🫿]/gu;
 const WORD = /[A-Za-z0-9_]+/g;
+const MIN_SEGMENT_SECONDS = 0.2;
 
 export function qoderHome() {
   return process.env.QODER_HOME || path.join(os.homedir(), '.qoder-cn');
@@ -188,9 +189,13 @@ function buildTurnMetrics(turnId, events, responses) {
 
   let peak = 0;
   let genSeconds = 0;
+  let ratedSegments = 0;
   for (let i = 0; i < segments.length; i += 1) {
     const seconds = secondsOf(segments[i]);
-    if (!(seconds > 0)) continue;
+    // Sub-200 ms segments are bookkeeping artefacts, not generation; their rate
+    // is meaningless and would dominate the peak.
+    if (!(seconds >= MIN_SEGMENT_SECONDS)) continue;
+    ratedSegments += 1;
     genSeconds += seconds;
     const tokens = hasReal ? segments[i].realTokens : tokensOf[i] >= 0 ? tokensOf[i] : seconds * fallbackPerSecond;
     if (tokens > 0 && tokens / seconds > peak) peak = tokens / seconds;
@@ -205,6 +210,7 @@ function buildTurnMetrics(turnId, events, responses) {
   return {
     turnId,
     startedAt: new Date(start).toISOString(),
+    lastEventAt: new Date(end).toISOString(),
     tokens,
     tokenSource: hasReal ? 'reported' : 'estimated',
     reportedOutputTokens: realOutput,
@@ -213,7 +219,8 @@ function buildTurnMetrics(turnId, events, responses) {
     wallSeconds,
     genSeconds: genSeconds > 0 ? genSeconds : wallSeconds,
     firstTokenMs,
-    segments: segments.length,
+    segments: ratedSegments,
+    requests: segments.length,
     rate: tokens > 0 && genSeconds > 0 ? tokens / genSeconds : 0,
     peakRate: peak,
   };
@@ -233,12 +240,22 @@ export function computeStats(options = {}) {
     .filter((t) => Number.isFinite(t.start))
     .sort((a, b) => a.start - b.start);
 
-  const transcriptPath = findTranscript(home, sessionId, options.cwd);
+  const transcriptPath = options.transcriptPath || findTranscript(home, sessionId, options.cwd);
   const responses = assistantResponses(transcriptPath);
-  const turnStats = ordered.map((t) => buildTurnMetrics(t.id, t.events, responses));
+  const all = ordered.map((t) => buildTurnMetrics(t.id, t.events, responses));
+  // The Stop hook names the finished turn outright; trust it over "latest on disk",
+  // which is often one of Qoder's background sub-session turns. Narrow the reported
+  // turn only — session totals always cover the whole session.
+  let turnStats = all;
+  if (options.turnId) turnStats = all.filter((t) => t.turnId === options.turnId);
+  if (Number.isFinite(options.afterMs)) {
+    const floor = options.afterMs - 5000;
+    const at = turnStats.filter((t) => Date.parse(t.startedAt) >= floor);
+    if (at.length) turnStats = at;
+  }
   const last = turnStats[turnStats.length - 1] || null;
 
-  const totals = turnStats.reduce(
+  const totals = all.reduce(
     (acc, t) => {
       acc.tokens += t.tokens;
       acc.genSeconds += t.genSeconds;
@@ -263,7 +280,7 @@ export function computeStats(options = {}) {
       wallSeconds: totals.wallSeconds,
       rate: totals.tokens > 0 && totals.genSeconds > 0 ? totals.tokens / totals.genSeconds : 0,
       peakRate: totals.peakRate,
-      turnCount: turnStats.length,
+      turnCount: all.length,
       tokenSource: last ? last.tokenSource : 'none',
     },
   };
@@ -319,10 +336,36 @@ export function formatNumber(value, digits = 1) {
   return NUM.format(Number(value.toFixed(digits)));
 }
 
+export function formatCompact(value) {
+  if (!Number.isFinite(value)) return 'n/a';
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 10_000) return `${Math.round(value / 1000)}k`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(Math.round(value));
+}
+
 export function formatStatsLine(stats) {
   const t = stats.turn;
   if (!t) return null;
   const mark = t.tokenSource === 'estimated' ? '~' : '';
-  const first = t.firstTokenMs != null ? `${(t.firstTokenMs / 1000).toFixed(1)}s` : 'n/a';
-  return `⚡ ${formatNumber(t.rate)} tok/s(本轮) · 首字 ${first} · 输出 ${mark}${NUM.format(Math.round(t.tokens))} tok / 生成 ${formatNumber(t.genSeconds)}s · ${t.segments} 段 / 峰 ${formatNumber(t.peakRate)}`;
+  const first = t.firstTokenMs != null ? `${(t.firstTokenMs / 1000).toFixed(1)}s` : '-';
+  const parts = [
+    `⚡ ${formatNumber(t.rate)} tok/s(本轮)`,
+    `首字 ${first}`,
+    `输出 ${mark}${NUM.format(Math.round(t.tokens))} tok / 生成 ${formatNumber(t.genSeconds)}s`,
+  ];
+  // A single-segment turn's "peak" is just its own rate; showing it is noise.
+  if (t.segments > 1) parts.push(`${t.segments} 段 / 峰 ${formatNumber(t.peakRate)}`);
+  return parts.join(' · ');
+}
+
+export function formatTurnLine(stats) {
+  const line = formatStatsLine(stats);
+  if (!line) return null;
+  const s = stats.session;
+  const at = new Date(stats.turn.lastEventAt || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
+  const parts = [line];
+  if (s && s.tokens > 0) parts.push(`累计 ${formatCompact(s.tokens)} tok / ${s.turnCount} 轮`);
+  parts.push(`⏱ ${at}`);
+  return parts.join(' · ');
 }
