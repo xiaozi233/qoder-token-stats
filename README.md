@@ -87,7 +87,7 @@ turn regardless.
 
 ## Verified
 
-Run against four real sessions on this machine, including two historical
+Run against real sessions on the author's machine, including two historical
 Bedrock-modding sessions:
 
 | session | tok/s | 首字 | 输出 | 生成 | 段 | 峰 |
@@ -103,3 +103,8 @@ Bedrock-modding sessions:
   plus a queryable log, not a live counter.
 - Estimates drift for code-heavy turns, where tokenizers cost punctuation and
   indentation differently than the word-count heuristic used here.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
