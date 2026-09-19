@@ -1,13 +1,16 @@
 // Install/uninstall the token-stats plugin into the Qoder user plugin registry.
 //
-//   node scripts/install.mjs            install
-//   node scripts/install.mjs --uninstall
+//   node scripts/install.mjs                       install (token counts stay estimated)
+//   node scripts/install.mjs --expose-token-usage  also set QODERCN_EXPOSE_TOKEN_USAGE=1
+//   node scripts/install.mjs --uninstall           remove plugin, and the env var
+//   node scripts/install.mjs --uninstall --keep-env
 //
 // Both registry files are backed up next to themselves (.bak) before writing.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -45,8 +48,50 @@ function readJson(file, fallback) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+// Qoder zeroes token counts before writing its session log unless this is set, so
+// real tok/s needs it in the *user* environment before Qoder starts. A running
+// process cannot change its own host env, hence it is opt-in here.
+const EXPOSE_ENV = 'QODERCN_EXPOSE_TOKEN_USAGE';
+
+// reg.exe is unusable from an MSYS shell — it rewrites `/v` into a Windows path.
+// PowerShell's registry provider takes no slash flags, so it survives.
+function runPowerShell(script) {
+  return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+  });
+}
+
+function currentEnvValue() {
+  const r = runPowerShell(
+    `(Get-ItemProperty -Path 'HKCU:\\Environment' -Name ${EXPOSE_ENV} -ErrorAction SilentlyContinue).${EXPOSE_ENV}`,
+  );
+  const value = (r.stdout || '').trim();
+  return r.status === 0 && value ? value : null;
+}
+
+function applyExposeEnv() {
+  const existing = currentEnvValue();
+  if (existing && existing !== '0') {
+    return `left ${EXPOSE_ENV}=${existing} as it was (already enabled)`;
+  }
+  const r = runPowerShell(`setx ${EXPOSE_ENV} 1`);
+  if (r.status !== 0) return `could not set ${EXPOSE_ENV}: ${(r.stderr || '').trim() || r.status}`;
+  return `set ${EXPOSE_ENV}=1 in HKCU\\Environment`;
+}
+
+function revertExposeEnv() {
+  const existing = currentEnvValue();
+  if (!existing) return null;
+  const r = runPowerShell(
+    `Remove-ItemProperty -Path 'HKCU:\\Environment' -Name ${EXPOSE_ENV} -ErrorAction SilentlyContinue; setx ${EXPOSE_ENV} 0 > $null`,
+  );
+  if (r.status !== 0) return `could not remove ${EXPOSE_ENV}: ${(r.stderr || '').trim() || r.status}`;
+  return `cleared ${EXPOSE_ENV} (was ${existing})`;
+}
+
 if (process.argv.includes('--uninstall')) {
   const registry = readJson(registryFile, { version: 2, plugins: {} });
+  const envNote = process.argv.includes('--keep-env') ? null : revertExposeEnv();
   if (!registry.plugins[key]) {
     process.stdout.write(`token-stats: not registered\n`);
   } else {
@@ -58,7 +103,9 @@ if (process.argv.includes('--uninstall')) {
       writeJsonWithBackup(settingsFile, settings);
     }
     fs.rmSync(installPath, { recursive: true, force: true });
-    process.stdout.write(`token-stats: removed ${key}\n`);
+    process.stdout.write(
+      [`token-stats: removed ${key}`, envNote ? `  ${envNote}` : '', ''].join('\n'),
+    );
   }
   process.exit(0);
 }
@@ -74,6 +121,8 @@ if (previous?.installPath && path.resolve(previous.installPath) !== path.resolve
 
 copyDir(source, installPath);
 fs.writeFileSync(path.join(installPath, 'SOURCE'), `${source}\n`, 'utf8');
+
+const envNote = process.argv.includes('--expose-token-usage') ? applyExposeEnv() : null;
 
 const now = new Date().toISOString();
 registry.plugins[key] = [
@@ -99,8 +148,16 @@ process.stdout.write(
     `  path:     ${installPath}`,
     `  registry: ${registryFile}`,
     `  backups:  *.bak next to each rewritten file`,
+    envNote ? `  env:      ${envNote}` : '',
     '',
-    'Restart Qoder so the Stop hook is picked up.',
+    envNote
+      ? 'Fully quit and reopen Qoder — the env var is read at process start.'
+      : `Token counts stay estimated (Qoder zeroes them in its log). To get real`,
+    envNote
+      ? ''
+      : `numbers, re-run with --expose-token-usage, then fully quit and reopen Qoder.`,
     '',
-  ].join('\n'),
+  ]
+    .filter(Boolean)
+    .join('\n'),
 );

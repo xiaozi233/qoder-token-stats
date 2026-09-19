@@ -14,12 +14,31 @@
 ```bash
 git clone https://github.com/xiaozi233/qoder-token-stats.git
 cd qoder-token-stats
-node scripts/install.mjs        # 注册到 ~/.qoder-cn，两个配置文件都会先备份 .bak
+node scripts/install.mjs --expose-token-usage   # 注册插件 + 让 Qoder 输出真实 token 数
 ```
 
-然后**重启 Qoder**——插件注册表只在启动时 reconcile 一次。重启后 `Stop` 钩子会在每轮结束时
-打印上面这行；同时 `token-stats` skill 会注册进来，你可以直接问 agent「本轮多少 tok/s」。
+`--expose-token-usage` 会把 `QODERCN_EXPOSE_TOKEN_USAGE=1` 写进 `HKCUEnvironment`。
+不加这个开关，Qoder 会在写会话日志前把所有 token 计数清零，数字就只能是估算。
 
+然后**完全退出并重开 Qoder**——环境变量和插件注册表都只在进程启动时读取。之后每轮回答结束，
+你会在回复末尾看到：
+
+```
+⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 3,389 tok / 生成 60.6s · 45 段 / 峰 84.6
+```
+
+同时 `token-stats` skill 会注册进来，可以直接问 agent「本轮多少 tok/s」。
+
+## 安装 / 卸载
+
+```bash
+node scripts/install.mjs                          # 只装插件，token 数为估算
+node scripts/install.mjs --expose-token-usage         # 同时设 QODERCN_EXPOSE_TOKEN_USAGE=1
+node scripts/install.mjs --uninstall                  # 移除插件并清掉该环境变量
+node scripts/install.mjs --uninstall --keep-env       # 保留环境变量
+```
+
+已设过该变量时重复执行不会覆盖。卸载时把它写成 `0` 而不是删除条目，方便你在注册表里看到改动痕迹。
 ## 目录结构
 
 | 路径 | 作用 |

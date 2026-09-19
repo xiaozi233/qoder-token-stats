@@ -13,13 +13,36 @@ same shape as the app's status line:
 ## Quick start
 
 ```bash
-git clone <this repo> && cd qoder-token-stats
-node scripts/install.mjs        # registers into ~/.qoder-cn, backs up both files
+git clone https://github.com/xiaozi233/qoder-token-stats.git
+cd qoder-token-stats
+node scripts/install.mjs --expose-token-usage   # register + ask Qoder for real token counts
 ```
 
-Restart Qoder — the plugin registry is reconciled once at startup. The `Stop`
-hook then prints the line above after every reply, and the `token-stats` skill
-lets the agent answer "本轮多少 tok/s".
+`--expose-token-usage` writes `QODERCN_EXPOSE_TOKEN_USAGE=1` into
+`HKCU\Environment`. Without it Qoder zeroes every token count on its way to the
+session log and the numbers stay estimated. Fully quit and reopen Qoder
+afterwards — the variable is read at process start, and the plugin registry is
+reconciled at the same time. The line then appears after every reply:
+
+```
+⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 3,389 tok / 生成 60.6s · 45 段 / 峰 84.6
+```
+
+The `token-stats` skill is registered too, so you can just ask the agent
+"本轮多少 tok/s".
+
+## Install
+
+```bash
+node scripts/install.mjs                          # plugin only, token counts estimated
+node scripts/install.mjs --expose-token-usage     # + set QODERCN_EXPOSE_TOKEN_USAGE=1
+node scripts/install.mjs --uninstall              # remove plugin and the env var
+node scripts/install.mjs --uninstall --keep-env   # keep the env var
+```
+
+Re-running with `--expose-token-usage` when the variable is already set leaves it
+alone. Uninstall clears it (a `0` value rather than deleting the entry, so the
+change is visible in `HKCU\Environment`).
 
 ## Layout
 
@@ -34,13 +57,6 @@ lets the agent answer "本轮多少 tok/s".
 | `runtime/token-stats.mjs` | CLI (`--current` for the model, `--session` for history) |
 | `skills/token-stats/SKILL.md` | teaches the agent to run and explain the numbers |
 | `scripts/install.mjs` | writes the user plugin registry (with `.bak` backups) |
-
-## Install
-
-```bash
-node scripts/install.mjs            # register into ~/.qoder-cn
-node scripts/install.mjs --uninstall
-```
 
 ## Iterating without reinstalling
 
