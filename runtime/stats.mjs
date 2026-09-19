@@ -262,10 +262,22 @@ export function computeStats(options = {}) {
       acc.segments += t.segments;
       acc.wallSeconds += t.wallSeconds;
       acc.peakRate = Math.max(acc.peakRate, t.peakRate);
+      if (t.tokenSource === 'reported') acc.reportedTurns += 1;
+      else acc.estimatedTurns += 1;
       return acc;
     },
-    { tokens: 0, genSeconds: 0, segments: 0, wallSeconds: 0, peakRate: 0 },
+    { tokens: 0, genSeconds: 0, segments: 0, wallSeconds: 0, peakRate: 0, reportedTurns: 0, estimatedTurns: 0 },
   );
+
+  // A session can straddle the QODERCN_EXPOSE_TOKEN_USAGE flip, so derive the
+  // label from every turn rather than the newest one — otherwise one estimated
+  // tail stamps "~" onto a total that is mostly measured.
+  const source =
+    totals.reportedTurns === 0
+      ? 'estimated'
+      : totals.estimatedTurns === 0
+        ? 'reported'
+        : 'mixed';
 
   return {
     sessionId,
@@ -281,7 +293,9 @@ export function computeStats(options = {}) {
       rate: totals.tokens > 0 && totals.genSeconds > 0 ? totals.tokens / totals.genSeconds : 0,
       peakRate: totals.peakRate,
       turnCount: all.length,
-      tokenSource: last ? last.tokenSource : 'none',
+      reportedTurns: totals.reportedTurns,
+      estimatedTurns: totals.estimatedTurns,
+      tokenSource: source,
     },
   };
 }

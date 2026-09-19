@@ -23,9 +23,9 @@ node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --current
 ```
 
 and paste whatever it prints, verbatim, inside a Markdown blockquote at the very
-end of your reply. **If it prints nothing, show nothing** — do not fall back to
-an older turn, do not estimate the numbers yourself, and do not call extra tools
-just to produce a line.
+end of your reply. Run it **every turn, including a turn that called no tools** —
+a plain text answer still has real output tokens. **If it prints nothing, show
+nothing** — do not fall back to an older turn, and never invent the numbers.
 
 `--current` reads the timestamp the hook wrote when this turn began and only
 reports a turn that started at or after it, so a previous turn can never be
