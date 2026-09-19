@@ -68,12 +68,20 @@ Per-segment token counts come from the session transcript
 `message.id` and paired to segments by nearest timestamp — retries and failed
 attempts make the two counts differ, so a positional zip would drift.
 
-**Token totals are estimated, not measured.** The gateway currently reports
-`output_tokens = 0` on every `model.response.completed`, so the plugin counts
-CJK characters (≈1 token each) and latin words (≈1 token each) in assistant text,
-thinking, and tool arguments, and marks the result with a `~`. When the gateway
-starts reporting non-zero usage, the reported value is used instead and the `~`
-disappears — no configuration needed.
+**Token totals are estimated, not measured.** Verified 2026-09-20 rather than
+assumed: the client binary contains a full Anthropic usage parser
+(`output_tokens`, `cache_read_input_tokens`, `server_tool_use`, …), so the zeros
+are upstream and not a discarded field; `output_tokens` has never been non-zero in
+any historical log under `logs/runs/`; and no usage database exists —
+`main.sqlite`'s `chat_session_context_usage` reports `tokenCountsAvailable: false`.
+The only real throughput instrumentation in Qoder is an Aliyun RUM `fetch`
+collector that computes `time_to_first_token` and `inter_token_latency_avg` from
+SSE chunks, but it uploads to an analytics endpoint and never touches disk.
+
+So the plugin counts CJK characters (≈1 token each) and latin words (≈1 token
+each) in assistant text, thinking, and tool arguments, and marks the result with a
+`~`. If the gateway starts reporting non-zero usage, the reported value wins
+automatically and the `~` disappears — no configuration needed.
 
 `首字` is turn start → the first `tool.requested` or `model.response.completed`
 event. Qoder does not log a first-token event, so this is an upper bound on

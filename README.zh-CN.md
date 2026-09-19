@@ -121,10 +121,16 @@ Stop          → 把同一行归档到 history.jsonl / latest.md
 
 - **统计行依赖模型配合。** 那是一串注入指令，不是渲染出来的控件——模型忽略它，这一行就不出现。
   Qoder 插件只能提供 hooks、MCP server 和 skill，没有 UI 扩展点，插件内部无法绘制常驻控件。
-- **token 总量是估算值。** 网关在每条 `model.response.completed` 上返回 `output_tokens = 0`，
-  且 `~/.qoder-cn` 下没有 usage 数据库（对比 ZCode：它的 `model_usage` 表逐条存了真实的
-  `output_tokens`、`reasoning_tokens` 与 `time_to_first_token_ms`，所以那边能出真值）。
-  代码密集的轮次估算会偏——分词器对标点、缩进、标识符的计法与这里的词数启发式差别较大。
+- **token 总量是估算值，且这是查证过的结论、不是没试过。** 2026-09-20 实测：
+  客户端二进制里**有完整的 Anthropic usage 解析**（`output_tokens`、`cache_read_input_tokens`、
+  `server_tool_use` 等），所以那些 0 是上游没给、不是客户端丢弃；`logs/runs/` 下全部历史日志
+  中 `output_tokens` **从未出现非零**；也不存在 usage 数据库——`main.sqlite` 的
+  `chat_session_context_usage` 快照写着 `tokenCountsAvailable: false`。
+  Qoder 侧唯一真实测速的东西是阿里 RUM 的 fetch-collector（它确实算
+  `time_to_first_token` 与 `inter_token_latency_avg`），但它上报到分析端点、不落本地磁盘。
+  因此本插件改用字符估算：中日韩 1 字/token、拉丁词 1 词/token，结果前加 `~`。
+  一旦网关开始回传真实 usage，会自动改用真值、`~` 消失，无需任何配置。
+  代码密集的轮次估算会偏——分词器对标点、缩进、标识符的计法与词数启发式差别较大。
 - **`首字` 是上界。** Qoder 不记录首 token 事件，取的是「轮开始 → 首次工具调用或整段响应完成」。
 
 ## 许可证
