@@ -116,6 +116,9 @@ Qoder’s own gateway every `model.response.completed` logs zeros. Set the SDK�
 `QODERCN_EXPOSE_TOKEN_USAGE=1` (values `1`/`true`/`yes`/`on`) in the environment
 before launching Qoder and the real numbers reach the log untouched. This plugin
 then switches to them automatically — `~` disappears, no configuration here.
+**Verified on 2026-09-20:** with the flag on, the same turn reported 976 real
+output tokens against 565 estimated, i.e. the character heuristic undercounted by
+~42%. Treat any `~`-prefixed number as a rough floor, not a measurement.
 
 Until then it counts CJK characters (≈1 token each) and latin words (≈1 token each)
 in assistant text, thinking, and tool arguments, marking the result with a `~`.

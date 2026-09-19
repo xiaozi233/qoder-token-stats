@@ -17,7 +17,7 @@ cd qoder-token-stats
 node scripts/install.mjs --expose-token-usage   # 注册插件 + 让 Qoder 输出真实 token 数
 ```
 
-`--expose-token-usage` 会把 `QODERCN_EXPOSE_TOKEN_USAGE=1` 写进 `HKCUEnvironment`。
+`--expose-token-usage` 会把 `QODERCN_EXPOSE_TOKEN_USAGE=1` 写进 `HKCU\Environment`。
 不加这个开关，Qoder 会在写会话日志前把所有 token 计数清零，数字就只能是估算。
 
 然后**完全退出并重开 Qoder**——环境变量和插件注册表都只在进程启动时读取。之后每轮回答结束，
@@ -162,6 +162,7 @@ Stop          → 把同一行归档到 history.jsonl / latest.md
   每条 `model.response.completed` 落盘都是 0。在启动 Qoder 前设好 SDK 的官方环境变量
   `QODERCN_EXPOSE_TOKEN_USAGE=1`（接受 `1`/`true`/`yes`/`on`），真实数值就会原样进日志；
   本插件会**自动**切到真值，`~` 前缀消失，插件侧无需任何配置。
+  **2026-09-20 实测已验证**：打开开关后同一轮真实输出 976 tok、字符估算只有 565，即低估约 42%。
 
   在那之前按字符估算：中日韩 1 字/token、拉丁词 1 词/token（含正文+thinking+工具参数），结果加 `~`。
   代码密集的轮次估算会偏——分词器对标点、缩进、标识符的计法与词数启发式差别较大。
