@@ -71,10 +71,13 @@ const cwd = args.cwd || process.cwd();
 if (args.current) {
   const state = readState(home);
   if (!state) process.exit(0);
-  const stats = computeStats({ home, sessionId: state.sessionId, cwd: state.cwd || cwd });
-  const turn = (stats.turns || []).find((t) => Date.parse(t.startedAt) >= state.promptAt - 5000);
-  if (!turn || !turn.tokens) process.exit(0);
-  process.stdout.write(`${formatTurnLine({ ...stats, turn })}\n`);
+  // afterMs counts only model segments started since this prompt, because one
+  // Qoder turn_id spans several user messages and its startedAt would otherwise
+  // point at the first message of a long conversation.
+  const stats = computeStats({ home, sessionId: state.sessionId, cwd: state.cwd || cwd, afterMs: state.promptAt });
+  const turn = stats.turn;
+  if (!turn || !turn.tokens || !turn.segments) process.exit(0);
+  process.stdout.write(`${formatTurnLine(stats)}\n`);
   process.exit(0);
 }
 

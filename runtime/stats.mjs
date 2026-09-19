@@ -115,13 +115,13 @@ function assistantResponses(transcriptPath) {
   return responses;
 }
 
-function buildTurnMetrics(turnId, events, responses) {
+function buildTurnMetrics(turnId, events, responses, sinceMs) {
   const sorted = events.slice().sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
   const at = (type) => sorted.find((e) => e.type === type);
   const of = (type) => sorted.filter((e) => e.type === type);
 
   const startEvent = at('turn.started') || at('input.prompt.submitted') || sorted[0];
-  const start = Date.parse(startEvent.ts);
+  let start = Date.parse(startEvent.ts);
   const end = sorted.reduce((acc, e) => Math.max(acc, Date.parse(e.ts)), start);
 
   const segments = [];
@@ -145,6 +145,20 @@ function buildTurnMetrics(turnId, events, responses) {
     if (out > 0) hasReal = true;
   }
   segments.sort((a, b) => a.start - b.start);
+  // Qoder reuses one turn_id across several user messages, so "the turn that
+  // began after this prompt" is not a thing. Restricting to segments started
+  // since the prompt is what actually isolates the current question.
+  if (Number.isFinite(sinceMs)) {
+    const only = segments.filter((s) => s.start >= sinceMs - 2000);
+    if (only.length) {
+      segments.length = 0;
+      segments.push(...only);
+      // Move the window forward to the first post-prompt segment; keeping the
+      // turn's original start here would re-admit the earlier messages' tokens.
+      start = segments[0].start;
+      realOutput = segments.reduce((acc, s) => acc + (s.realTokens || 0), 0);
+    }
+  }
 
   const turnResponses = [...responses.values()]
     .filter((r) => r.ts >= start - 2000 && r.ts <= end + 2000)
@@ -201,7 +215,8 @@ function buildTurnMetrics(turnId, events, responses) {
     if (tokens > 0 && tokens / seconds > peak) peak = tokens / seconds;
   }
 
-  const firstEvent = of('tool.requested')[0] || of('model.response.completed')[0];
+  const inWindow = (list) => list.filter((e) => Date.parse(e.ts) >= start);
+  const firstEvent = inWindow(of('tool.requested'))[0] || inWindow(of('model.response.completed'))[0];
   const firstTokenMs = firstEvent ? Date.parse(firstEvent.ts) - start : null;
 
   const wallSeconds = (end - start) / 1000;
@@ -249,9 +264,14 @@ export function computeStats(options = {}) {
   let turnStats = all;
   if (options.turnId) turnStats = all.filter((t) => t.turnId === options.turnId);
   if (Number.isFinite(options.afterMs)) {
-    const floor = options.afterMs - 5000;
-    const at = turnStats.filter((t) => Date.parse(t.startedAt) >= floor);
-    if (at.length) turnStats = at;
+    // Re-measure the selected turn counting only segments that began after the
+    // prompt, since a Qoder turn_id spans several user messages.
+    const current = turnStats[turnStats.length - 1];
+    const source = ordered.find((t) => t.id === current?.turnId);
+    if (source) {
+      const sliced = buildTurnMetrics(source.id, source.events, responses, options.afterMs);
+      if (sliced.segments > 0) turnStats = [sliced];
+    }
   }
   const last = turnStats[turnStats.length - 1] || null;
 
