@@ -120,6 +120,17 @@ if (process.argv.includes('--uninstall')) {
       writeJsonWithBackup(settingsFile, settings);
     }
     fs.rmSync(installPath, { recursive: true, force: true });
+    // installPath is the versioned directory (`.../token-stats/0.5.0`), so
+    // removing it leaves an empty `<plugin>/` behind. Take that too when nothing
+    // else is in it, then the `local/` marketplace directory if it is now empty,
+    // so an uninstall leaves no trace beyond the documented `.bak` files.
+    for (const dir of [path.dirname(installPath), path.dirname(path.dirname(installPath))]) {
+      try {
+        if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+      } catch {
+        /* a non-empty or busy directory is fine to leave */
+      }
+    }
     process.stdout.write(
       [`token-stats: removed ${key}`, envNote ? `  ${envNote}` : '', ''].join('\n'),
     );

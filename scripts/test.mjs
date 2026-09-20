@@ -403,6 +403,48 @@ test('estimateTokens counts CJK per character and latin per word', () => {
   assert.equal(estimateTokens('snake_case_name'), 1);
 });
 
+section('the installer');
+
+test('install then uninstall leaves no registry, settings or cache residue', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-install-'));
+  const install = path.join(root, 'scripts', 'install.mjs');
+  const runInstaller = (args) =>
+    spawnSync(process.execPath, [install, ...args], { encoding: 'utf8', env: { ...process.env, QODER_HOME: home } });
+
+  const installed = runInstaller([]);
+  assert.equal(installed.status, 0, installed.stderr);
+  const regFile = path.join(home, 'plugins', 'installed_plugins_v2.json');
+  const setFile = path.join(home, 'settings.json');
+  assert.ok(JSON.parse(fs.readFileSync(regFile, 'utf8')).plugins['token-stats@local'], 'expected a registry entry');
+  assert.ok(
+    JSON.parse(fs.readFileSync(setFile, 'utf8')).enabledPlugins['token-stats@local'],
+    'expected an enabledPlugins entry',
+  );
+
+  const removed = runInstaller(['--uninstall']);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(regFile, 'utf8')).plugins['token-stats@local'], undefined);
+  assert.equal(JSON.parse(fs.readFileSync(setFile, 'utf8')).enabledPlugins['token-stats@local'], undefined);
+  // The versioned install directory AND its now-empty parents must be gone.
+  assert.equal(fs.existsSync(path.join(home, 'plugins', 'cache', 'local')), false, 'empty cache dirs left behind');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('a QODER_HOME-sandboxed install never touches the real environment', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-sandbox-'));
+  const install = path.join(root, 'scripts', 'install.mjs');
+  const r = spawnSync(process.execPath, [install, '--expose-token-usage'], {
+    encoding: 'utf8',
+    env: { ...process.env, QODER_HOME: home },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  // The env var lives in the real HKCU\Environment regardless of QODER_HOME, so a
+  // sandboxed run must refuse it rather than silently edit the host. This is not
+  // hypothetical: an early version of this suite wiped the author's flag.
+  assert.match(r.stdout, /skipped QODERCN_EXPOSE_TOKEN_USAGE/, 'a sandboxed run must not set the host variable');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 section('the overlay that reads the archive');
 
 test('overlay.ps1 keeps its UTF-8 BOM', () => {
