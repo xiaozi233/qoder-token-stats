@@ -359,6 +359,29 @@ test('a keyless --current ignores a newer background entry', () => {
   assert.equal(selectCurrentTurn(readState(home), home).sessionId, 'gone-session');
 });
 
+test('an early measurement reaches the archive with its warning attached', () => {
+  // The strip paints `warnings` (dashboard/overlay.ps1:287), so a warning that
+  // never lands in latest.json is a warning nobody sees. Run the real hook: the
+  // retry-turn fixture's model called the CLI before writing its summary, which
+  // is the case the warning exists for.
+  const home = homeFor('retry-turn', { transcript: true });
+  const id = sessionIdOf('retry-turn');
+  const hook = runHook(
+    'stop-stats.mjs',
+    {
+      session_id: id,
+      cwd: 'F:\\fixture-project',
+      transcript_path: path.join(home, 'projects', 'F--fixture-project', `${id}.jsonl`),
+    },
+    home,
+  );
+  assert.equal(hook.status, 0, hook.stderr);
+  const latest = readLatest(home);
+  assert.ok(latest.warnings.length > 0, 'the early-call warning must reach latest.json');
+  assert.match(latest.warnings[0], /漏掉/);
+  assert.match(fs.readFileSync(path.join(archived(home).dir, 'latest.md'), 'utf8'), /- ⚠ /);
+});
+
 section('state: per-turn keys and concurrency');
 
 test('each turn gets its own key', () => {

@@ -202,6 +202,12 @@ function buildTurnMetrics(turnId, events, responses, options = {}) {
 
   let inWindow = segments;
   if (boundaryMs != null) {
+    // A segment counts only if it had already finished when the boundary was
+    // recorded — not merely if it had started. That distinction is what keeps the
+    // quoted line and the archived line identical: a segment still in flight when
+    // the CLI runs carries no tokens yet, so counting it would make the CLI report
+    // less than the Stop hook, which later sees the same segment completed. Do not
+    // "improve" this to a start-based test.
     inWindow = segments.filter((s) => s.end != null && s.end <= boundaryMs);
     const excluded = segments.filter((s) => !inWindow.includes(s));
     const excludedTokens = excluded.reduce((acc, s) => acc + (s.realTokens || 0), 0);
