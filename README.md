@@ -336,6 +336,14 @@ measurements recorded in this repository's history.
   exist until the reply starts, and a background sub-session can fire
   `UserPromptSubmit` in the same directory. Per-turn keys and the lock cover this,
   but it is the case to check first if a line goes missing.
+- **A missing line is not a wrong number — check whether the hook ran at all.**
+  Replacing the plugin's version directory while Qoder is running makes the hook
+  fail with `Plugin directory does not exist`, and that turn is never archived: the
+  chat line ends up with no row behind it. `errors.jsonl` cannot report this,
+  because a process that never started writes nothing. The failure only exists in
+  Qoder's own `hook.finished` events, so filter on their fields (a `hook_name` is
+  present and `success` is `false`) rather than grepping the message text — the
+  prompt that describes this failure is itself echoed into those same logs.
 
 ## License
 

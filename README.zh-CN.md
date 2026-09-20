@@ -305,6 +305,11 @@ set TOKEN_STATS_SOURCE=<本仓库的绝对路径>                  # 或直接�
 - **`首字` 是上界**，对单段轮次它整好等于整段生成时间。Qoder 不记录首 token 事件。
 - **会话第一轮最脆弱。** 它的 transcript 要到回答开始才落盘，而且后台子会话会在同一目录触发
   `UserPromptSubmit`。每轮独立 key 和锁覆盖了这一点，但真要是少了一行，先查这个场景。
+- **少一行不等于数字错，先确认钩子到底跑没跑。** 在 Qoder 运行时替换插件的版本目录，钩子会以
+  `Plugin directory does not exist` 失败，而那一轮**根本不会归档**——结果是聊天有行、归档没有行。
+  `errors.jsonl` 报不了这种失败：进程没启动，自然写不出日志。要查只能筛 Qoder 自己的
+  `hook.finished` 事件（`hook_name` 存在且 `success === false`），别按错误文本 grep——
+  本仓库那份提示词的正文会被回写进同样的日志，一搜就命中自己。
 
 ## 许可证
 
