@@ -64,7 +64,7 @@
    期望 `version: "0.6.1"`、`installPath` 以 `...\cache\local\token-stats\0.6.1` 结尾。
    若注册表还停在旧版本，说明 `node scripts/install.mjs` 还没跑过，或者跑完还没重开 Qoder。
 
-2. 跑测试，必须是 **32 passed, 0 failed**：
+2. 跑测试，必须是 **33 passed, 0 failed**：
 
    ```bash
    node scripts/test.mjs
@@ -204,7 +204,7 @@ node runtime/token-stats.mjs --session 9762dfc7-bd0d-4825-ae7b-887b44807dd0 "%CD
 node scripts/test.mjs
 ```
 
-必须 32 passed。然后验证卸载干净（**用沙箱 `QODER_HOME`，不要真的卸掉正在用的插件**，
+必须 33 passed。然后验证卸载干净（**用沙箱 `QODER_HOME`，不要真的卸掉正在用的插件**，
 否则会摘掉你自己脚下的钩子）：
 
 ```bash
