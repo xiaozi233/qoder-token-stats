@@ -90,6 +90,7 @@ Qoder 还在运行时该脚本会拒绝执行——因为第二个实例只会�
 | `scripts/test.mjs` | `node scripts/test.mjs` —— 25 个测试，零依赖 |
 | `scripts/make-fixtures.mjs` | 从真实的 `~/.qoder-cn` 重新生成 `tests/fixtures/` |
 | `skills/token-stats/SKILL.md` | 教会 agent 怎么跑、怎么解释这些数字 |
+| `docs/agent-prompt.md` | 交接提示词：让 Qoder 里的 agent 接手本仓库，含只有在 Qoder 内部才能跑的验收步骤 |
 | `dashboard/overlay.ps1` | 可选的桌面置顶悬浮条（完全不经过模型） |
 | `dashboard/overlay.cmd` | 上面那个脚本的双击入口 |
 | `scripts/install.mjs` | 写入用户插件注册表（改前留 `.bak` 备份） |

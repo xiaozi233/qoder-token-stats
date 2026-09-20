@@ -128,6 +128,7 @@ hands off to the first and inherits nothing.
 | `scripts/test.mjs` | `node scripts/test.mjs` — 25 tests, no dependencies |
 | `scripts/make-fixtures.mjs` | regenerates `tests/fixtures/` from a real `~/.qoder-cn` |
 | `skills/token-stats/SKILL.md` | teaches the agent to run and explain the numbers |
+| `docs/agent-prompt.md` | handoff prompt for running an agent on this repo inside Qoder — includes the verification steps that cannot run outside Qoder |
 | `dashboard/overlay.ps1` | optional always-on-top desktop strip (no model involved) |
 | `dashboard/overlay.cmd` | double-click wrapper for `overlay.ps1` |
 | `scripts/install.mjs` | writes the user plugin registry (with `.bak` backups) |
