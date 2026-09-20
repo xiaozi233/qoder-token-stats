@@ -709,6 +709,38 @@ test('a QODER_HOME-sandboxed install never touches the real environment', () => 
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('an upgrade keeps the version a live session still points at', () => {
+  // Qoder pins `${QODER_PLUGIN_ROOT}` per session, so removing the directory an
+  // upgrade replaced does not merely cost that session a turn: Stop and every
+  // following UserPromptSubmit fail with `Plugin directory does not exist` until
+  // the client restarts. Observed on the author's install at 18:38 on 2026-09-20.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-prune-'));
+  const install = path.join(root, 'scripts', 'install.mjs');
+  const runInstaller = () =>
+    spawnSync(process.execPath, [install], { encoding: 'utf8', env: { ...process.env, QODER_HOME: home } });
+
+  assert.equal(runInstaller().status, 0);
+  const versionsRoot = path.join(home, 'plugins', 'cache', 'local', 'token-stats');
+  const live = fs.readdirSync(versionsRoot)[0];
+
+  const day = 86400000;
+  for (const [name, age] of [['0.0.1', 3], ['0.0.2', 2], ['0.0.3', 1]]) {
+    const dir = path.join(versionsRoot, name);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'marker'), name);
+    const when = new Date(Date.now() - age * day);
+    fs.utimesSync(dir, when, when);
+  }
+
+  assert.equal(runInstaller().status, 0);
+  const after = fs.readdirSync(versionsRoot).sort();
+  assert.ok(after.includes(live), 'the version just installed must survive');
+  assert.ok(after.includes('0.0.3'), 'the previous version must survive: a session may still point at it');
+  assert.equal(after.includes('0.0.1'), false, 'older versions must be pruned');
+  assert.equal(after.includes('0.0.2'), false, 'older versions must be pruned');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 section('the overlay that reads the archive');
 
 test('overlay.ps1 keeps its UTF-8 BOM', () => {

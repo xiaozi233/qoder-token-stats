@@ -143,12 +143,33 @@ registry.version = registry.version || 2;
 registry.plugins = registry.plugins || {};
 
 const previous = registry.plugins[key]?.[0];
-if (previous?.installPath && path.resolve(previous.installPath) !== path.resolve(installPath)) {
-  fs.rmSync(previous.installPath, { recursive: true, force: true });
-}
-
 copyDir(source, installPath);
 fs.writeFileSync(path.join(installPath, 'SOURCE'), `${source}\n`, 'utf8');
+
+// Keep the version a running session still points at. Qoder pins
+// `${QODER_PLUGIN_ROOT}` per session, so deleting the directory an upgrade
+// replaced does not cost that session one turn, it kills every hook in it:
+// `hook.finished {success:false, exit_code:1, error:"Plugin directory does not
+// exist: …0.6.3 (token-stats@local — run /plugin to reinstall)"}` on Stop *and*
+// on every following UserPromptSubmit, until the client is restarted. So prune
+// everything but the newest two, which covers the session mid-flight during an
+// upgrade, and never remove `installPath` itself.
+try {
+  const versionsRoot = path.dirname(installPath);
+  const live = path.resolve(installPath);
+  const kept = fs
+    .readdirSync(versionsRoot, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => ({ name: e.name, at: fs.statSync(path.join(versionsRoot, e.name)).mtimeMs }))
+    .sort((a, b) => b.at - a.at);
+  for (const stale of kept.slice(2)) {
+    const dir = path.join(versionsRoot, stale.name);
+    if (path.resolve(dir) === live) continue;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+} catch {
+  /* an unreadable cache is not a reason to fail the install */
+}
 
 const envNote = process.argv.includes('--expose-token-usage') ? applyExposeEnv() : null;
 
