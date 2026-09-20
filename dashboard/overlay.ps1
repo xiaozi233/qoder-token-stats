@@ -8,6 +8,9 @@
 #   stop    powershell -NoProfile -File dashboard\overlay.ps1 -Stop
 #
 # Drag it anywhere; the position is remembered. Right-click for the menu.
+#
+# Keep the UTF-8 BOM on this file. PowerShell 5.1 reads a BOM-less .ps1 as ANSI,
+# and the CJK literals below then break the parse.
 
 #Requires -Version 5.1
 param(
