@@ -1,18 +1,37 @@
-// Token/throughput statistics computed from Qoder's own session event logs.
+// Token/throughput statistics computed from Qoder's own session logs.
+//
+// There is exactly one implementation of this: the CLI, the Stop hook and the
+// overlay all consume what is computed here, so no two of them can report
+// different numbers for the same turn.
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import {
+  EVENTS,
+  FIELDS,
+  TRANSCRIPT,
+  field,
+  isType,
+  cliInvocation,
+  probe,
+  qoderHome,
+  projectsRoot,
+  sanitizeProject,
+  sessionsRoot,
+} from './schema.mjs';
 
-// CJK ideographs, kana and hangul cost ~1 token per character; a latin run collapses to one.
-const CJK_ALL =
-  /[　-〿぀-ヿ㐀-䶿一-鿿가-힯🀀-🫿]/gu;
+// CJK ideographs, kana and hangul cost ~1 token per character; a latin run
+// collapses to one.
+const CJK_ALL = /[　-〿぀-ヿ㐀-䶿一-鿿가-힯🀀-🫿]/gu;
 const WORD = /[A-Za-z0-9_]+/g;
 const MIN_SEGMENT_SECONDS = 0.2;
+const WINDOW_SLACK_MS = 2000;
+const PAIRING_SLACK_MS = 5000;
+// A quote measured this far before the turn ends means the model called the CLI
+// early and the number is missing real work — worth saying out loud.
+const EARLY_BOUNDARY_SHARE = 0.2;
 
-export function qoderHome() {
-  return process.env.QODER_HOME || path.join(os.homedir(), '.qoder-cn');
-}
+export { qoderHome };
 
 export function estimateTokens(text) {
   if (!text) return 0;
@@ -29,44 +48,46 @@ function blockText(block) {
   return '';
 }
 
-function sanitizeProject(dir) {
-  // Qoder replaces each separator run with a single dash but keeps the path's
-  // own dashes, so `D:\test\x` becomes `D--test-x`, not `D-test-x`.
-  return String(dir)
-    .split(/[\\/]+/)
-    .filter(Boolean)
-    .join('-')
-    .replace(/[^A-Za-z0-9._-]+/g, '-');
-}
-
 function readJsonl(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
   const out = [];
-  for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
-    const line = raw.trim();
-    if (!line) continue;
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
     try {
       out.push(JSON.parse(line));
     } catch {
-      /* a partially flushed line is not worth failing over */
+      // A partially flushed line is not worth failing the turn over.
     }
   }
   return out;
 }
 
-function findSessionDir(home, sessionId, cwd) {
-  const roots = [path.join(home, 'logs', 'sessions')];
-  for (const root of roots) {
-    if (!fs.existsSync(root)) continue;
-    if (cwd) {
-      const direct = path.join(root, sanitizeProject(cwd), sessionId);
-      if (fs.existsSync(direct)) return direct;
-    }
-    for (const project of fs.readdirSync(root)) {
-      const candidate = path.join(root, project, sessionId);
-      if (fs.existsSync(candidate)) return candidate;
-    }
+// Prefer the sanitized directory name; fall back to scanning, so a slug-rule
+// change degrades to "slower" rather than "wrong".
+function findIn(root, sessionId, cwd, suffix) {
+  if (!fs.existsSync(root)) return null;
+  if (cwd) {
+    const direct = path.join(root, sanitizeProject(cwd), `${sessionId}${suffix}`);
+    if (fs.existsSync(direct)) return direct;
+  }
+  for (const project of fs.readdirSync(root)) {
+    const candidate = path.join(root, project, `${sessionId}${suffix}`);
+    if (fs.existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+function findSessionDir(home, sessionId, cwd) {
+  return findIn(sessionsRoot(home), sessionId, cwd, '');
+}
+
+function findTranscriptPath(home, sessionId, cwd) {
+  return findIn(projectsRoot(home), sessionId, cwd, '.jsonl');
 }
 
 function loadEvents(sessionDir) {
@@ -76,21 +97,18 @@ function loadEvents(sessionDir) {
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).sort()) {
     events = events.concat(readJsonl(path.join(dir, file)));
   }
-  return events.filter((e) => e && e.type && e.ts);
+  return events.filter((e) => e && typeof e.type === 'string' && e.ts);
 }
 
 function groupTurns(events, sessionId) {
   const turns = new Map();
   for (const e of events) {
-    // Hook events are stamped with the session id, not a real turn id.
-    if (typeof e.turn_id !== 'string' || e.turn_id === sessionId) continue;
-    if (!/^[0-9a-f-]{16,}$/i.test(e.turn_id)) continue;
-    let turn = turns.get(e.turn_id);
-    if (!turn) {
-      turn = [];
-      turns.set(e.turn_id, turn);
-    }
-    turn.push(e);
+    const turnId = field(e, FIELDS.turnId);
+    // Hook events carry the session id where a turn id would be.
+    if (typeof turnId !== 'string' || turnId === sessionId) continue;
+    if (!/^[0-9a-f-]{16,}$/i.test(turnId)) continue;
+    if (!turns.has(turnId)) turns.set(turnId, []);
+    turns.get(turnId).push(e);
   }
   return turns;
 }
@@ -99,7 +117,7 @@ function assistantResponses(transcriptPath) {
   const responses = new Map();
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return responses;
   for (const entry of readJsonl(transcriptPath)) {
-    if (entry.type !== 'assistant' || !entry.message || !Array.isArray(entry.message.content)) continue;
+    if (entry.type !== TRANSCRIPT.assistant || !entry.message || !Array.isArray(entry.message.content)) continue;
     const stamp = Date.parse(entry.timestamp || entry.ts || '');
     const key = entry.message.id || (Number.isFinite(stamp) ? `@${stamp}` : '?');
     let response = responses.get(key);
@@ -115,62 +133,103 @@ function assistantResponses(transcriptPath) {
   return responses;
 }
 
-function buildTurnMetrics(turnId, events, responses, sinceMs) {
-  const sorted = events.slice().sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-  const at = (type) => sorted.find((e) => e.type === type);
-  const of = (type) => sorted.filter((e) => e.type === type);
+// The measurement window for a turn is delimited by the model's own end-of-
+// answer CLI call: everything up to and including the segment that made that
+// call. Deriving it from the log (not from a hand-off) is what makes the CLI
+// and the Stop hook agree to the byte — both see the same call, so both stop at
+// the same place. Only the short quote the model writes afterwards is excluded.
+function quoteBoundary(events) {
+  let at = null;
+  for (const e of events) {
+    if (cliInvocation(e)) {
+      const ts = Date.parse(e.ts);
+      if (Number.isFinite(ts) && (at == null || ts > at)) at = ts;
+    }
+  }
+  return at;
+}
 
-  const startEvent = at('turn.started') || at('input.prompt.submitted') || sorted[0];
-  let start = Date.parse(startEvent.ts);
-  const end = sorted.reduce((acc, e) => Math.max(acc, Date.parse(e.ts)), start);
+function buildTurnMetrics(turnId, events, responses, options = {}) {
+  const sorted = events.slice().sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+  const at = (logical) => sorted.find((e) => isType(e, logical));
+  const of = (logical) => sorted.filter((e) => isType(e, logical));
+
+  const startEvent = at('turnStarted') || at('promptSubmitted') || sorted[0];
+  const turnStart = Date.parse(startEvent.ts);
+  const turnEnd = sorted.reduce((acc, e) => Math.max(acc, Date.parse(e.ts)), turnStart);
 
   const segments = [];
-  let realOutput = 0;
-  let realInput = 0;
-  let hasReal = false;
   const byId = new Map();
-  for (const e of of('model.request.started')) {
-    const segment = { start: Date.parse(e.ts), end: null, realTokens: 0 };
+  for (const e of of('requestStarted')) {
+    const segment = {
+      start: Date.parse(e.ts),
+      end: null,
+      realTokens: 0,
+      inputTokens: 0,
+      requestId: field(e, FIELDS.requestId),
+    };
     segments.push(segment);
-    if (e.request_id) byId.set(e.request_id, segment);
+    if (segment.requestId) byId.set(segment.requestId, segment);
   }
-  for (const e of of('model.response.completed')) {
-    const segment = (e.request_id && byId.get(e.request_id)) || { start: Date.parse(e.ts), end: null, realTokens: 0 };
+  let realOutput = 0;
+  for (const e of of('responseCompleted')) {
+    const id = field(e, FIELDS.requestId);
+    const segment = (id && byId.get(id)) || { start: Date.parse(e.ts), end: null, realTokens: 0, inputTokens: 0 };
     if (!segments.includes(segment)) segments.push(segment);
     segment.end = Date.parse(e.ts);
-    const out = Number(e.data && e.data.output_tokens) || 0;
-    segment.realTokens += out;
-    realOutput += out;
-    realInput += Number(e.data && e.data.input_tokens) || 0;
-    if (out > 0) hasReal = true;
+    segment.realTokens += Number(field(e, FIELDS.outputTokens)) || 0;
+    segment.inputTokens += Number(field(e, FIELDS.inputTokens)) || 0;
   }
   segments.sort((a, b) => a.start - b.start);
-  // Qoder reuses one turn_id across several user messages, so "the turn that
-  // began after this prompt" is not a thing. Restricting to segments started
-  // since the prompt is what actually isolates the current question.
-  let noSegmentsInWindow = false;
-  if (Number.isFinite(sinceMs)) {
-    const only = segments.filter((s) => s.start >= sinceMs - 2000);
-    if (only.length) {
-      segments.length = 0;
-      segments.push(...only);
-      // Move the window forward to the first post-prompt segment; keeping the
-      // turn's original start here would re-admit the earlier messages' tokens.
-      start = segments[0].start;
-      realOutput = segments.reduce((acc, s) => acc + (s.realTokens || 0), 0);
-    } else {
-      // Nothing in this window means the turn being measured predates the prompt,
-      // so the numbers below are somebody else's turn. `--current` drops them.
-      noSegmentsInWindow = true;
+
+  const warnings = [];
+  const boundaryMs = options.boundaryMs ?? quoteBoundary(sorted);
+  const windowSource = boundaryMs != null ? 'quote' : 'end';
+  const end = Math.min(boundaryMs ?? turnEnd, turnEnd);
+
+  // The user message that opened this measurement is the last prompt submitted
+  // at or before the boundary. Deriving it from the log — rather than from the
+  // hook's clock — is what lets the CLI and the Stop hook compute the identical
+  // window without handing anything to each other.
+  let promptMs = null;
+  for (const e of of('promptSubmitted')) {
+    const ts = Date.parse(e.ts);
+    if (ts <= end + WINDOW_SLACK_MS && (promptMs == null || ts > promptMs)) promptMs = ts;
+  }
+
+  let inWindow = segments;
+  if (boundaryMs != null) {
+    inWindow = segments.filter((s) => s.end != null && s.end <= boundaryMs);
+    const excluded = segments.filter((s) => !inWindow.includes(s));
+    const excludedTokens = excluded.reduce((acc, s) => acc + (s.realTokens || 0), 0);
+    const totalTokens = segments.reduce((acc, s) => acc + (s.realTokens || 0), 0);
+    // Only the model's own short quote legitimately trails the CLI call. A large
+    // trailing share means the command ran early, so the number is missing real
+    // work — say so instead of presenting it as the turn.
+    if (totalTokens > 0 && excludedTokens / totalTokens > EARLY_BOUNDARY_SHARE) {
+      warnings.push(
+        `统计命令在本轮结束前 ${Math.round((turnEnd - boundaryMs) / 1000)}s 就被调用，漏掉 ${excludedTokens} tok（约 ${Math.round((100 * excludedTokens) / totalTokens)}%）——应把该命令作为最后一个动作`,
+      );
     }
   }
 
+  // Qoder reuses one turn_id across several user messages, so narrow to the
+  // segments that start after the prompt that opened this measurement.
+  const selected = (promptMs != null ? inWindow.filter((s) => s.start >= promptMs - WINDOW_SLACK_MS) : inWindow)
+    .slice()
+    .sort((a, b) => a.start - b.start);
+  const noSegmentsInWindow = selected.length === 0;
+  const start = selected.length ? selected[0].start : promptMs ?? turnStart;
+
   const turnResponses = [...responses.values()]
-    .filter((r) => r.ts >= start - 2000 && r.ts <= end + 2000)
+    .filter((r) => r.ts >= start - WINDOW_SLACK_MS && r.ts <= end + WINDOW_SLACK_MS)
     .sort((a, b) => a.ts - b.ts);
   const estimatedTokens = turnResponses.reduce((acc, r) => acc + estimateTokens(r.text), 0);
   const responseReal = turnResponses.reduce((acc, r) => acc + r.realTokens, 0);
-  if (responseReal > 0) hasReal = true;
+
+  const windowRealOutput = selected.reduce((acc, s) => acc + (s.realTokens || 0), 0);
+  const realInput = selected.reduce((acc, s) => acc + (s.inputTokens || 0), 0);
+  const hasReal = windowRealOutput > 0 || responseReal > 0;
 
   // A transcript response is written when the model finishes, so its timestamp
   // lines up with the matching model.response.completed event. Retries and
@@ -178,7 +237,7 @@ function buildTurnMetrics(turnId, events, responses, sinceMs) {
   // instead of a positional zip.
   const secondsOf = (segment) => (segment.end == null ? 0 : (segment.end - segment.start) / 1000);
   const taken = new Set();
-  const tokensOf = segments.map((segment) => {
+  const tokensOf = selected.map((segment) => {
     if (!segment.end) return 0;
     let best = -1;
     let bestGap = Infinity;
@@ -190,42 +249,46 @@ function buildTurnMetrics(turnId, events, responses, sinceMs) {
         best = i;
       }
     }
-    if (best === -1 || bestGap > 5000) return -1;
+    if (best === -1 || bestGap > PAIRING_SLACK_MS) return -1;
     taken.add(best);
     return estimateTokens(turnResponses[best].text);
   });
 
   const matched = tokensOf.filter((t) => t >= 0);
   let fallbackPerSecond = 0;
-  if (matched.length !== segments.length) {
+  if (matched.length !== selected.length) {
     const unmatched = estimatedTokens - matched.reduce((acc, t) => acc + t, 0);
-    const restSeconds = segments.reduce((acc, s, i) => (tokensOf[i] < 0 ? acc + secondsOf(s) : acc), 0);
+    const restSeconds = selected.reduce((acc, s, i) => (tokensOf[i] < 0 ? acc + secondsOf(s) : acc), 0);
+    const totalSeconds = selected.reduce((acc, s) => acc + secondsOf(s), 0);
     fallbackPerSecond =
-      restSeconds > 0 && unmatched > 0
-        ? unmatched / restSeconds
-        : estimatedTokens / Math.max(segments.reduce((acc, s) => acc + secondsOf(s), 0), 1);
+      restSeconds > 0 && unmatched > 0 ? unmatched / restSeconds : estimatedTokens / Math.max(totalSeconds, 1);
   }
 
   let peak = 0;
   let genSeconds = 0;
   let ratedSegments = 0;
-  for (let i = 0; i < segments.length; i += 1) {
-    const seconds = secondsOf(segments[i]);
+  for (let i = 0; i < selected.length; i += 1) {
+    const seconds = secondsOf(selected[i]);
     // Sub-200 ms segments are bookkeeping artefacts, not generation; their rate
     // is meaningless and would dominate the peak.
     if (!(seconds >= MIN_SEGMENT_SECONDS)) continue;
     ratedSegments += 1;
     genSeconds += seconds;
-    const tokens = hasReal ? segments[i].realTokens : tokensOf[i] >= 0 ? tokensOf[i] : seconds * fallbackPerSecond;
+    const tokens = hasReal
+      ? selected[i].realTokens || 0
+      : tokensOf[i] >= 0
+        ? tokensOf[i]
+        : seconds * fallbackPerSecond;
     if (tokens > 0 && tokens / seconds > peak) peak = tokens / seconds;
   }
 
-  const inWindow = (list) => list.filter((e) => Date.parse(e.ts) >= start);
-  const firstEvent = inWindow(of('tool.requested'))[0] || inWindow(of('model.response.completed'))[0];
+  const inWindowEvents = (logical) =>
+    sorted.filter((e) => isType(e, logical)).filter((e) => Date.parse(e.ts) >= start && Date.parse(e.ts) <= end);
+  const firstEvent = inWindowEvents('toolRequested')[0] || inWindowEvents('responseCompleted')[0];
   const firstTokenMs = firstEvent ? Date.parse(firstEvent.ts) - start : null;
 
   const wallSeconds = (end - start) / 1000;
-  const tokens = hasReal ? Math.max(realOutput, responseReal) : estimatedTokens;
+  const tokens = hasReal ? windowRealOutput : estimatedTokens;
 
   return {
     turnId,
@@ -233,52 +296,54 @@ function buildTurnMetrics(turnId, events, responses, sinceMs) {
     lastEventAt: new Date(end).toISOString(),
     tokens,
     tokenSource: hasReal ? 'reported' : 'estimated',
-    reportedOutputTokens: realOutput,
+    reportedOutputTokens: windowRealOutput,
     reportedInputTokens: realInput,
     estimatedTokens,
     wallSeconds,
     genSeconds: genSeconds > 0 ? genSeconds : wallSeconds,
     firstTokenMs,
     segments: ratedSegments,
-    requests: segments.length,
+    requests: selected.length,
     rate: tokens > 0 && genSeconds > 0 ? tokens / genSeconds : 0,
     peakRate: peak,
     noSegmentsInWindow,
+    window: { promptMs, boundaryMs, source: windowSource, segmentsTotal: segments.length },
+    warnings,
   };
 }
 
 export function computeStats(options = {}) {
   const home = options.home || qoderHome();
   const sessionId = options.sessionId;
-  if (!sessionId) return { error: 'missing session id' };
+  if (!sessionId) return { error: 'missing-session-id', detail: 'no session id was supplied' };
   const sessionDir = findSessionDir(home, sessionId, options.cwd);
-  if (!sessionDir) return { error: `no session log for ${sessionId}` };
+  if (!sessionDir) {
+    return {
+      error: 'no-session-log',
+      detail: `no segment log for session ${sessionId} under ${sessionsRoot(home)}`,
+    };
+  }
 
   const events = loadEvents(sessionDir);
+  const format = probe(events);
+  if (!format.ok) return { error: format.reason, detail: format.detail, sessionDir };
+
   const turns = groupTurns(events, sessionId);
   const ordered = [...turns.entries()]
     .map(([id, evs]) => ({ id, events: evs, start: Math.min(...evs.map((e) => Date.parse(e.ts))) }))
     .filter((t) => Number.isFinite(t.start))
     .sort((a, b) => a.start - b.start);
 
-  const transcriptPath = options.transcriptPath || findTranscript(home, sessionId, options.cwd);
+  const transcriptPath = options.transcriptPath || findTranscriptPath(home, sessionId, options.cwd);
   const responses = assistantResponses(transcriptPath);
-  const all = ordered.map((t) => buildTurnMetrics(t.id, t.events, responses));
-  // The Stop hook names the finished turn outright; trust it over "latest on disk",
-  // which is often one of Qoder's background sub-session turns. Narrow the reported
-  // turn only — session totals always cover the whole session.
+  const build = (t) => buildTurnMetrics(t.id, t.events, responses, { afterMs: options.afterMs });
+  const all = ordered.map(build);
+
+  // The Stop hook names the finished turn outright; trust it over "latest on
+  // disk", which is often one of Qoder's background sub-session turns. Narrow
+  // the reported turn only — session totals always cover the whole session.
   let turnStats = all;
   if (options.turnId) turnStats = all.filter((t) => t.turnId === options.turnId);
-  if (Number.isFinite(options.afterMs)) {
-    // Re-measure the selected turn counting only segments that began after the
-    // prompt, since a Qoder turn_id spans several user messages.
-    const current = turnStats[turnStats.length - 1];
-    const source = ordered.find((t) => t.id === current?.turnId);
-    if (source) {
-      const sliced = buildTurnMetrics(source.id, source.events, responses, options.afterMs);
-      if (sliced.segments > 0) turnStats = [sliced];
-    }
-  }
   const last = turnStats[turnStats.length - 1] || null;
 
   const totals = all.reduce(
@@ -299,11 +364,7 @@ export function computeStats(options = {}) {
   // label from every turn rather than the newest one — otherwise one estimated
   // tail stamps "~" onto a total that is mostly measured.
   const source =
-    totals.reportedTurns === 0
-      ? 'estimated'
-      : totals.estimatedTurns === 0
-        ? 'reported'
-        : 'mixed';
+    totals.reportedTurns === 0 ? 'estimated' : totals.estimatedTurns === 0 ? 'reported' : 'mixed';
 
   return {
     sessionId,
@@ -326,49 +387,39 @@ export function computeStats(options = {}) {
   };
 }
 
-function findTranscript(home, sessionId, cwd) {
-  const root = path.join(home, 'projects');
-  if (!fs.existsSync(root)) return null;
-  if (cwd) {
-    const direct = path.join(root, sanitizeProject(cwd), `${sessionId}.jsonl`);
-    if (fs.existsSync(direct)) return direct;
-  }
-  for (const project of fs.readdirSync(root)) {
-    const candidate = path.join(root, project, `${sessionId}.jsonl`);
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
 const NUM = new Intl.NumberFormat('en-US');
 
 export function recentSessions(home, cwd, limit = 5) {
-  const root = path.join(home, 'logs', 'sessions');
+  const root = sessionsRoot(home);
   if (!fs.existsSync(root)) return [];
-  const scoped = cwd && fs.existsSync(path.join(root, sanitizeProject(cwd)))
-    ? path.join(root, sanitizeProject(cwd))
-    : root;
-  if (!fs.existsSync(scoped)) return [];
+  const sanitized = cwd ? path.join(root, sanitizeProject(cwd)) : null;
+  const scoped = sanitized && fs.existsSync(sanitized) ? sanitized : root;
   const out = [];
   for (const entry of fs.readdirSync(scoped, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(scoped, entry.name);
     if (!fs.existsSync(path.join(dir, 'segments'))) continue;
     const stat = fs.statSync(dir);
-    const { turns } = computeStats({ home, sessionId: entry.name, cwd }) || {};
+    const stats = computeStats({ home, sessionId: entry.name, cwd });
+    const transcript = Boolean(findTranscriptPath(home, entry.name, cwd));
+    const turnCount = stats.turns?.length || 0;
     out.push({
       sessionId: entry.name,
       mtime: stat.mtimeMs,
-      turns: turns?.length || 0,
-      segments: turns?.reduce((acc, t) => acc + t.segments, 0) || 0,
-      transcript: Boolean(findTranscript(home, entry.name, cwd)),
+      turns: turnCount,
+      segments: stats.turns?.reduce((acc, t) => acc + t.segments, 0) || 0,
+      transcript,
+      // Only a session with no transcript *and* no completed turn looks like a
+      // Qoder background sub-session. A headless run (--input-format stream-json)
+      // and a session mid-first-turn also have no transcript, and labelling
+      // those "background" was wrong.
+      background: !transcript && turnCount === 0,
+      error: stats.error || null,
     });
   }
   // Real user sessions own a transcript; Qoder's background sub-sessions do not,
   // and they are usually the most recently touched. Rank transcripts first.
-  return out
-    .sort((a, b) => Number(b.transcript) - Number(a.transcript) || b.mtime - a.mtime)
-    .slice(0, limit);
+  return out.sort((a, b) => Number(b.transcript) - Number(a.transcript) || b.mtime - a.mtime).slice(0, limit);
 }
 
 export function formatNumber(value, digits = 1) {

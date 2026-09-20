@@ -5,17 +5,21 @@
 //   token-stats.mjs --session <id>        a specific session's last turn
 //   token-stats.mjs --session <id> -n 3   last three turns
 //   token-stats.mjs --json                machine readable
+//
+// Stdout is only ever the answer — never an error and never a placeholder
+// number. A failure explains itself on stderr, exits non-zero, and lands in the
+// data directory's errors.jsonl, so "no data this turn" stays distinguishable
+// from "the log could not be read".
 
-import fs from 'node:fs';
-import path from 'node:path';
 import process from 'node:process';
+import { appendError, readState, selectTurn } from './archive.mjs';
 import {
   computeStats,
+  formatNumber,
   formatStatsLine,
   formatTurnLine,
-  formatNumber,
-  recentSessions,
   qoderHome,
+  recentSessions,
 } from './stats.mjs';
 
 function parseArgs(argv) {
@@ -33,69 +37,50 @@ function parseArgs(argv) {
   return out;
 }
 
-function readState(home) {
-  for (const dir of [
-    process.env.QODER_PLUGIN_DATA,
-    path.join(home, 'plugins', 'data', 'token-stats-local'),
-  ]) {
-    if (!dir) continue;
-    try {
-      const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
-      if (Array.isArray(state.turns) || Number.isFinite(state.promptAt)) return state;
-    } catch {
-      /* try the next location */
-    }
-  }
-  return null;
-}
+const HELP = [
+  'usage: token-stats [--current [-k <key>]] [--session <id>] [--turns N] [--json] [<cwd>]',
+  '',
+  '--current prints one bare statistics line for the turn the UserPromptSubmit hook',
+  'timestamped, and nothing at all if that turn has not produced model requests yet',
+  '— so a previous turn is never presented as the current one. Pass the --key the',
+  'hook injected to pin the lookup to this turn; without it the newest turn a',
+  'transcript-owning session recorded is what you get.',
+  '',
+  'A readable session log whose format this build does not recognise exits 2 with an',
+  'explanation on stderr — it never prints zeros as if they were measurements.',
+  '',
+  'Data source: ~/.qoder-cn/logs/sessions/<project>/<session>/segments/*.jsonl',
+  '',
+].join('\n');
 
-// `--key` picks the entry the UserPromptSubmit hook minted for this exact turn.
-// Without a key this falls back to the newest turn a transcript-owning session
-// recorded, which is the pre-key behaviour and can be stale on a first turn.
-function selectTurn(state, key) {
-  if (!state) return null;
-  if (key) {
-    const hit = (Array.isArray(state.turns) ? state.turns : []).find((t) => t && t.key === key);
-    return hit && Number.isFinite(hit.promptAt) ? hit : null;
-  }
-  return Number.isFinite(state.promptAt) ? state : null;
+function fail(kind, detail, code = 1) {
+  appendError(kind, detail);
+  process.stderr.write(`token-stats: ${detail}\n`);
+  process.exit(code);
 }
 
 const args = parseArgs(process.argv.slice(2));
-const home = qoderHome();
 
 if (args.help) {
-  process.stdout.write(
-    [
-      'usage: token-stats [--current [-k <key>]] [--session <id>] [--turns N] [--json] [<cwd>]',
-      '',
-      '--current prints one bare statistics line for the turn the UserPromptSubmit hook',
-      'timestamped, and nothing at all if that turn has not produced model requests yet',
-      '— so a previous turn is never presented as the current one. Pass the --key the',
-      'hook injected to pin the lookup to this turn; without it the newest turn a',
-      'transcript-owning session recorded is what you get.',
-      '',
-      'Data source: ~/.qoder-cn/logs/sessions/<project>/<session>/segments/*.jsonl',
-      '',
-    ].join('\n'),
-  );
+  process.stdout.write(HELP);
   process.exit(0);
 }
 
+const home = qoderHome();
 const cwd = args.cwd || process.cwd();
 
 if (args.current) {
   const turnRecord = selectTurn(readState(home), args.key);
+  // Nothing to report is a normal outcome, not an error: the turn may simply
+  // not have produced a model request yet.
   if (!turnRecord || !turnRecord.sessionId) process.exit(0);
-  // afterMs counts only model segments started since this prompt, because one
-  // Qoder turn_id spans several user messages and its startedAt would otherwise
-  // point at the first message of a long conversation.
+
   const stats = computeStats({
     home,
     sessionId: turnRecord.sessionId,
     cwd: turnRecord.cwd || cwd,
-    afterMs: turnRecord.promptAt,
   });
+  if (stats.error) fail(`current:${stats.error}`, stats.detail || stats.error, 2);
   const turn = stats.turn;
   if (!turn || !turn.tokens || !turn.segments || turn.noSegmentsInWindow) process.exit(0);
   process.stdout.write(`${formatTurnLine(stats)}\n`);
@@ -113,7 +98,8 @@ if (!args.sessionId) {
       'also runs background sub-sessions here, so the newest one is not necessarily yours.',
       'Most recent:',
       ...candidates.map(
-        (c) => `  ${c.sessionId}  ${new Date(c.mtime).toISOString()}  ${c.turns} turns / ${c.segments} segments${c.transcript ? '' : '  (no transcript — background sub-session)'}`,
+        (c) =>
+          `  ${c.sessionId}  ${new Date(c.mtime).toISOString()}  ${c.turns} turns / ${c.segments} segments${c.background ? '  (no transcript, no turns — background sub-session)' : ''}${c.error ? `  [! ${c.error}]` : ''}`,
       ),
       '',
     ].join('\n'),
@@ -122,10 +108,7 @@ if (!args.sessionId) {
 }
 
 const stats = computeStats({ home, sessionId: args.sessionId, cwd });
-if (stats.error) {
-  process.stderr.write(`token-stats: ${stats.error}\n`);
-  process.exit(1);
-}
+if (stats.error) fail(stats.error, stats.detail || stats.error, 2);
 
 if (args.json) {
   process.stdout.write(`${JSON.stringify(stats, null, 2)}\n`);
@@ -133,8 +116,10 @@ if (args.json) {
 }
 
 const selected = stats.turns.slice(-Math.max(1, args.turns));
+const warnings = selected.flatMap((t) => t.warnings || []);
 if (selected.length === 0) {
   process.stdout.write(`session ${stats.sessionId}: 尚无已完成的对话轮次\n`);
+  if (warnings.length) process.stderr.write(`${warnings.map((w) => `warning: ${w}`).join('\n')}\n`);
   process.exit(0);
 }
 const lines = selected.map((t) => formatStatsLine({ turn: t }));
@@ -148,3 +133,4 @@ const source = {
 }[totals.tokenSource];
 
 process.stdout.write([`session ${stats.sessionId}`, ...lines, footer, source, ''].join('\n'));
+if (warnings.length) process.stderr.write(`${[...new Set(warnings)].map((w) => `warning: ${w}`).join('\n')}\n`);

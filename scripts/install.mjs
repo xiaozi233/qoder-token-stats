@@ -53,6 +53,13 @@ function readJson(file, fallback) {
 // process cannot change its own host env, hence it is opt-in here.
 const EXPOSE_ENV = 'QODERCN_EXPOSE_TOKEN_USAGE';
 
+// The env var lives in the real HKCU\Environment no matter which home this run
+// targets (Qoder reads it at process start, so it cannot be scoped to a
+// directory). That made a QODER_HOME-sandboxed run silently edit the real
+// registry. Refuse instead: a sandboxed install is never meant to change the
+// host's environment, and doing so is how an unrelated test wiped the flag.
+const sandboxed = path.resolve(home) !== path.resolve(path.join(os.homedir(), '.qoder-cn'));
+
 // reg.exe is unusable from an MSYS shell — it rewrites `/v` into a Windows path.
 // PowerShell's registry provider takes no slash flags, so it survives.
 function runPowerShell(script) {
@@ -70,6 +77,9 @@ function currentEnvValue() {
 }
 
 function applyExposeEnv() {
+  if (sandboxed) {
+    return `skipped ${EXPOSE_ENV}: this run targets ${home}, not the real ~/.qoder-cn, and the variable lives in the real HKCU\\Environment`;
+  }
   const existing = currentEnvValue();
   if (existing && existing !== '0') {
     return `left ${EXPOSE_ENV}=${existing} as it was (already enabled)`;
@@ -80,13 +90,20 @@ function applyExposeEnv() {
 }
 
 function revertExposeEnv() {
+  if (sandboxed) return `skipped ${EXPOSE_ENV}: this run targets ${home}, not the real ~/.qoder-cn`;
   const existing = currentEnvValue();
   if (!existing) return null;
-  const r = runPowerShell(
-    `Remove-ItemProperty -Path 'HKCU:\\Environment' -Name ${EXPOSE_ENV} -ErrorAction SilentlyContinue; setx ${EXPOSE_ENV} 0 > $null`,
+  // A bare `setx NAME 0` left the variable behind with the literal value "0",
+  // which uninstall is documented not to do. Deleting the value is the removal;
+  // `setx` only exists to broadcast WM_SETTINGCHANGE, and an empty value makes
+  // it fail with a syntax error (verified), so its status is not the outcome.
+  runPowerShell(
+    `Remove-ItemProperty -Path 'HKCU:\\Environment' -Name ${EXPOSE_ENV} -ErrorAction SilentlyContinue; setx ${EXPOSE_ENV} "" > $null`,
   );
-  if (r.status !== 0) return `could not remove ${EXPOSE_ENV}: ${(r.stderr || '').trim() || r.status}`;
-  return `cleared ${EXPOSE_ENV} (was ${existing})`;
+  const left = currentEnvValue();
+  return left
+    ? `warning: could not remove ${EXPOSE_ENV} (still ${left}) — delete it from HKCU\\Environment by hand`
+    : `cleared ${EXPOSE_ENV} (was ${existing})`;
 }
 
 if (process.argv.includes('--uninstall')) {

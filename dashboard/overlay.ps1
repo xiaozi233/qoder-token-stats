@@ -16,7 +16,11 @@
 param(
     [switch]$Stop,
     [switch]$Status,
-    [string]$DataDir = (Join-Path $env:USERPROFILE '.qoder-cn\plugins\data\token-stats-local'),
+    [string]$DataDir = $(
+        if ($env:QODER_PLUGIN_DATA) { $env:QODER_PLUGIN_DATA }
+        elseif ($env:QODER_HOME) { Join-Path $env:QODER_HOME 'plugins\data\token-stats-local' }
+        else { Join-Path $env:USERPROFILE '.qoder-cn\plugins\data\token-stats-local' }
+    ),
     [string]$ProcessName = 'Qoder CN'
 )
 
@@ -53,6 +57,7 @@ if ($Stop) {
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 
 Add-Type @"
 using System;
@@ -186,11 +191,42 @@ function Set-Anchor($w) {
     $w.Top = $area.Bottom - $StripH - 40
 }
 
+# WPF positions are DIPs while Screen.Bounds is in device pixels, so the two only
+# agree at 100% scaling. Resolve the window's current scale (1.0 before the
+# window has a visual tree) and convert.
+function Get-DpiScale($w) {
+    try {
+        $source = [System.Windows.Media.PresentationSource]::FromVisual($w)
+        if ($source) { return $source.CompositionTarget.TransformToDevice.M11 }
+    } catch { }
+    return 1.0
+}
+
+# The work area of the monitor the strip is currently on. SystemParameters.
+# WorkArea is only the *primary* monitor, so a strip dragged to a second screen
+# used to be yanked back to the first one.
+function Get-WorkArea($w) {
+    try {
+        $scale = Get-DpiScale $w
+        $x = [int]($w.Left * $scale)
+        $y = [int]($w.Top * $scale)
+        $screen = [System.Windows.Forms.Screen]::FromPoint((New-Object System.Drawing.Point($x, $y)))
+        $b = $screen.WorkingArea
+        return @{
+            X = $b.X / $scale; Y = $b.Y / $scale
+            Width = $b.Width / $scale; Height = $b.Height / $scale
+            Right = ($b.X + $b.Width) / $scale; Bottom = ($b.Y + $b.Height) / $scale
+        }
+    } catch {
+        return [System.Windows.SystemParameters]::WorkArea
+    }
+}
+
 # Before Show() WPF reports Left/Top as -32000 in device pixels (about -21845
 # DIPs on a scaled display). Restoring that value parks the strip off-screen,
 # so every position gets pulled back inside the work area.
 function Clamp-ToWorkArea($w) {
-    $area = [System.Windows.SystemParameters]::WorkArea
+    $area = Get-WorkArea $w
     $minX = $area.X - $StripW + 80
     $minY = $area.Y - $StripH + 40
     $maxX = $area.X + $area.Width - 80
@@ -209,7 +245,7 @@ Set-Anchor $window
 # pull-back happens after each render rather than inside Set-Anchor.
 function Fit-ToScreen($w) {
     $width = if ($w.ActualWidth) { $w.ActualWidth } else { $StripW }
-    $area = [System.Windows.SystemParameters]::WorkArea
+    $area = Get-WorkArea $w
     if ($w.Left + $width -gt $area.Right - 8) {
         $w.Left = $area.Right - $width - 8
     }
@@ -244,9 +280,15 @@ $timer.Add_Tick({
         $age = ((Get-Date) - [DateTime]::Parse($stats.at)).TotalSeconds
         # latest.json is written by the Stop hook, so while a turn is in flight the
         # strip still shows the one that just finished. "(本轮)" would be a lie there.
-        $text.Text = ([string]$stats.line).Replace('(本轮)', '(上一轮)')
+        # A warning (the model called the measurement CLI before its summary, so the
+        # number is short) is appended rather than hidden — a wrong number shown
+        # silently is worse than a long line.
+        $line = ([string]$stats.line).Replace('(本轮)', '(上一轮)')
+        $warned = $stats.PSObject.Properties.Name -contains 'warnings' -and $stats.warnings
+        if ($warned) { $line = "$line  ⚠ 数字偏小（统计早于回答结束）" }
+        $text.Text = $line
         $text.Foreground = New-Object System.Windows.Media.SolidColorBrush(
-            [System.Windows.Media.ColorConverter]::ConvertFromString($(if ($age -gt 600) { $palette.dim } else { $palette.main })))
+            [System.Windows.Media.ColorConverter]::ConvertFromString($(if ($warned) { '#FFE8A33D' } elseif ($age -gt 600) { $palette.dim } else { $palette.main })))
     }
 
     $window.UpdateLayout()
