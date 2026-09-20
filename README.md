@@ -97,8 +97,8 @@ node scripts/install.mjs --uninstall --keep-env   # keep the env var
 ```
 
 Re-running with `--expose-token-usage` when the variable is already set leaves it
-alone. Uninstall clears it (a `0` value rather than deleting the entry, so the
-change is visible in `HKCU\Environment`).
+alone. Uninstall deletes the value from `HKCU\Environment` (`setx NAME 0` was the
+first attempt and it left a visible `0` behind, which is not a removal).
 
 ### If the `~` prefix does not disappear
 
