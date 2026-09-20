@@ -69,10 +69,13 @@ the archived figure. Now the chat line and the archived line are computed by the
 same function from the same boundary, so they agree exactly.
 
 If the model runs the command early anyway — before finishing its answer — the
-turn is **flagged** rather than reported as if complete: the CLI writes
-`warning: 统计命令在本轮结束前 Ns 就被调用，漏掉 M tok（约 P%）` to stderr, the
-archive records it in `warnings`, and the desktop strip appends
-`⚠ 数字偏小（统计早于回答结束）` and draws the line in amber.
+turn is **flagged** rather than reported as if complete. The early call itself
+cannot raise that flag: the work it skipped has not happened yet, so there is
+nothing to weigh against the total. It is computed afterwards, and then appears in
+the archive's `warnings`, in `latest.md`, on the desktop strip (which appends
+`⚠ 数字偏小（统计早于回答结束）` and draws the line in amber), and on the stderr of
+a `--session` query. The quoted chat line stays byte-identical to the archived
+one, so a reader who sees only the chat cannot tell the number is short.
 
 ## What the plugin will not do
 
