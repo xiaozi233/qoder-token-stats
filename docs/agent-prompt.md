@@ -55,15 +55,16 @@
    `{"hook_name":"Stop","success":false,"exit_code":1,"error":"Plugin directory does not exist: C:\\Users\\…\\token-stats\\0.4.0 (token-stats@local — run /plugin to reinstall)"}`。
    如果用户还没重开，**先停下来让他重开**，不要在旧进程上做任何验收。
 
-1. 确认注册表指向 0.6.0：
+1. 确认注册表指向 0.6.1：
 
    ```bash
    node -e "const r=require(process.env.USERPROFILE+'/.qoder-cn/plugins/installed_plugins_v2.json');console.log(JSON.stringify(r.plugins['token-stats@local'],null,1))"
    ```
 
-   期望 `version: "0.6.0"`、`installPath` 以 `...\cache\local\token-stats\0.6.0` 结尾。
+   期望 `version: "0.6.1"`、`installPath` 以 `...\cache\local\token-stats\0.6.1` 结尾。
+   若注册表还停在旧版本，说明 `node scripts/install.mjs` 还没跑过，或者跑完还没重开 Qoder。
 
-2. 跑测试，必须是 **27 passed, 0 failed**：
+2. 跑测试，必须是 **32 passed, 0 failed**：
 
    ```bash
    node scripts/test.mjs
@@ -203,7 +204,7 @@ node runtime/token-stats.mjs --session 9762dfc7-bd0d-4825-ae7b-887b44807dd0 "%CD
 node scripts/test.mjs
 ```
 
-必须 27 passed。然后验证卸载干净（**用沙箱 `QODER_HOME`，不要真的卸掉正在用的插件**，
+必须 32 passed。然后验证卸载干净（**用沙箱 `QODER_HOME`，不要真的卸掉正在用的插件**，
 否则会摘掉你自己脚下的钩子）：
 
 ```bash
