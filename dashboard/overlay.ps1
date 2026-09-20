@@ -123,7 +123,10 @@ $window.ResizeMode = 'NoResize'
 $window.AllowsTransparency = $true
 $window.Topmost = $true
 $window.ShowInTaskbar = $false
-$window.Width = $StripW
+# Lines vary in length (单段轮次不带「段/峰」), so a fixed width either clips the
+# longest one or leaves the shortest one mostly empty.
+$window.SizeToContent = 'Width'
+$window.MinWidth = $StripW
 $window.Height = $StripH
 $window.Title = 'token-stats overlay'
 
@@ -202,6 +205,17 @@ function Clamp-ToWorkArea($w) {
 
 Set-Anchor $window
 
+# ActualWidth is only known once WPF has measured the text, so the right-edge
+# pull-back happens after each render rather than inside Set-Anchor.
+function Fit-ToScreen($w) {
+    $width = if ($w.ActualWidth) { $w.ActualWidth } else { $StripW }
+    $area = [System.Windows.SystemParameters]::WorkArea
+    if ($w.Left + $width -gt $area.Right - 8) {
+        $w.Left = $area.Right - $width - 8
+    }
+    if ($w.Left -lt $area.X) { $w.Left = $area.X }
+}
+
 $script:App = New-Object System.Windows.Application
 $script:App.ShutdownMode = 'OnExplicitShutdown'
 
@@ -226,15 +240,17 @@ $timer.Add_Tick({
         $text.Text = 'token-stats: 还没有归档数据（等一轮回答结束）'
         $text.Foreground = New-Object System.Windows.Media.SolidColorBrush(
             [System.Windows.Media.ColorConverter]::ConvertFromString($palette.dim))
-        return
+    } else {
+        $age = ((Get-Date) - [DateTime]::Parse($stats.at)).TotalSeconds
+        # latest.json is written by the Stop hook, so while a turn is in flight the
+        # strip still shows the one that just finished. "(本轮)" would be a lie there.
+        $text.Text = ([string]$stats.line).Replace('(本轮)', '(上一轮)')
+        $text.Foreground = New-Object System.Windows.Media.SolidColorBrush(
+            [System.Windows.Media.ColorConverter]::ConvertFromString($(if ($age -gt 600) { $palette.dim } else { $palette.main })))
     }
 
-    $age = ((Get-Date) - [DateTime]::Parse($stats.at)).TotalSeconds
-    # latest.json is written by the Stop hook, so while a turn is in flight the
-    # strip still shows the one that just finished. "(本轮)" would be a lie there.
-    $text.Text = ([string]$stats.line).Replace('(本轮)', '(上一轮)')
-    $text.Foreground = New-Object System.Windows.Media.SolidColorBrush(
-        [System.Windows.Media.ColorConverter]::ConvertFromString($(if ($age -gt 600) { $palette.dim } else { $palette.main })))
+    $window.UpdateLayout()
+    Fit-ToScreen $window
 })
 $timer.Start()
 
