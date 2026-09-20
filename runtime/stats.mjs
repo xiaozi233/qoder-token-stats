@@ -24,7 +24,7 @@ import {
 // collapses to one.
 const CJK_ALL = /[　-〿぀-ヿ㐀-䶿一-鿿가-힯🀀-🫿]/gu;
 const WORD = /[A-Za-z0-9_]+/g;
-const MIN_SEGMENT_SECONDS = 0.2;
+export const MIN_SEGMENT_SECONDS = 0.2;
 const WINDOW_SLACK_MS = 2000;
 const PAIRING_SLACK_MS = 5000;
 // A quote measured this far before the turn ends means the model called the CLI

@@ -19,6 +19,7 @@ import {
   formatStatsLine,
   formatTurnLine,
   measurable,
+  MIN_SEGMENT_SECONDS,
   qoderHome,
   recentSessions,
 } from './stats.mjs';
@@ -76,9 +77,14 @@ if (args.current) {
   // one, the newest recorded turn has to prove it belongs to a real session —
   // a background sub-session's turn is not the user's "current" anything.
   const turnRecord = args.key ? selectTurn(state, args.key) : selectCurrentTurn(state, home);
-  // Nothing to report is a normal outcome, not an error: the turn may simply
-  // not have produced a model request yet.
-  if (!turnRecord || !turnRecord.sessionId) process.exit(0);
+  // Nothing to report is a normal outcome, not an error. But an empty stdout is
+  // also what a caller sees when the record is missing, so a key we were handed
+  // and cannot find is worth one line on stderr — worth silencing only when the
+  // caller asked without a key, where "no state at all" is unremarkable.
+  if (!turnRecord || !turnRecord.sessionId) {
+    if (args.key) process.stderr.write(`token-stats: no turn recorded for key ${args.key}\n`);
+    process.exit(0);
+  }
 
   const stats = computeStats({
     home,
@@ -87,7 +93,21 @@ if (args.current) {
   });
   if (stats.error) fail(`current:${stats.error}`, stats.detail || stats.error, 2);
   const turn = stats.turn;
-  if (!measurable(turn)) process.exit(0);
+  if (!measurable(turn)) {
+    // Empty stdout covers two situations a caller cannot tell apart: this turn
+    // has nothing to measure, and its measurement has not taken shape yet. Which
+    // one it is goes to stderr; stdout and the archive are untouched, so this
+    // costs no number and no row.
+    const why = !turn
+      ? 'the session has no completed turn yet'
+      : turn.tokens <= 0
+        ? 'the turn produced no output tokens'
+        : turn.requests === 0 || turn.noSegmentsInWindow
+          ? 'no segment of this turn has completed yet — the window is still forming'
+          : `the only segments in the window are shorter than ${MIN_SEGMENT_SECONDS * 1000}ms, so there is no rate to report yet`;
+    process.stderr.write(`token-stats: nothing to print: ${why}\n`);
+    process.exit(0);
+  }
   process.stdout.write(`${formatTurnLine(stats)}\n`);
   process.exit(0);
 }

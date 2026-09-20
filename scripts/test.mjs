@@ -293,6 +293,9 @@ test('the CLI and the Stop hook agree that a nothing-measured turn has no line',
   const cli = runCli(['--current', '--key', 'k'], { QODER_HOME: cliHome });
   assert.equal(cli.status, 0, cli.stderr);
   assert.equal(cli.stdout, '', 'the CLI must not print a number when there is none');
+  // ...but it has to say why: an empty stdout is also what a caller sees when the
+  // measurement simply has not taken shape yet, and those are different things.
+  assert.match(cli.stderr, /nothing to print: the turn produced no output tokens/);
 
   // The Stop hook used to archive a row anyway, leaving history entries that no
   // chat line could ever correspond to.
@@ -305,6 +308,18 @@ test('the CLI and the Stop hook agree that a nothing-measured turn has no line',
   // Pinned to this reason, so a different guard firing cannot hide a regression.
   const errors = readJsonl(path.join(archived(hookHome).dir, 'errors.jsonl'));
   assert.equal(errors.at(-1).kind, 'stop:nothing-measured');
+});
+
+test('a key with no record is explained on stderr, not silently dropped', () => {
+  const home = homeFor('no-tool-turn', { transcript: true });
+  const out = runCli(['--current', '--key', 'evicted-key'], { QODER_HOME: home });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, '');
+  assert.match(out.stderr, /no turn recorded for key evicted-key/);
+  // Without a key there is nothing to say: absent state is unremarkable.
+  const bare = runCli(['--current'], { QODER_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'ts-nokey-')) });
+  assert.equal(bare.stdout, '');
+  assert.equal(bare.stderr, '');
 });
 
 test('a turn can be recorded without taking over latest.json', () => {
