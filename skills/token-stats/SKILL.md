@@ -16,26 +16,44 @@ its status bar:
 ## Showing the line at the end of an answer
 
 The `UserPromptSubmit` hook injects an instruction telling you to do this. Follow
-it: after all other work, just before your final summary, run
+it exactly: **write your whole summary first, then run this as your last action** —
 
 ```bash
 node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --current --key <key>
 ```
 
+Order matters, and not cosmetically. The metrics stop at the moment this command
+runs, so anything you write afterwards is not counted. Run it before your summary
+and the summary is excluded — measured at **32% of the turn on average** across
+30 real turns. Run it last and only the short quote itself is excluded (~7%).
+
 Use the command exactly as the hook injected it — the `--key` is minted per turn
 and identifies *your* turn. Paste whatever it prints, verbatim, inside a Markdown
-blockquote at the very end of your reply. Run it **every turn, including a turn
-that called no tools** — a plain text answer still has real output tokens. **If it
-prints nothing, show nothing** — do not fall back to an older turn, and never
-invent the numbers.
+blockquote at the very end of your reply, with nothing after it. Run it **every
+turn, including a turn that called no tools** — a plain text answer still has real
+output tokens. **If it prints nothing, show nothing** — do not fall back to an
+older turn, and never invent the numbers.
+
+If the CLI prints a `warning:` line to stderr, the turn was measured early and the
+number is short. Say so when you quote it rather than presenting it as complete.
 
 `--current` looks up the record the hook wrote for that key, so nothing has to
 guess which turn is live; without `--key` it falls back to the newest turn
 recorded by a transcript-owning session. A turn whose model requests all predate
 its own timestamp prints nothing, so a previous turn can never be presented as the
-current one — and the first turn of a session now gets a line too, which it did
-not before per-turn keys.
+current one.
 
+### If the command fails
+
+A non-zero exit with a message on stderr is not "no data". A message containing
+`Qoder's log format has changed` means this build cannot read the log — report that
+to the user instead of showing a number or staying silent. A full example:
+
+```
+token-stats: unrecognised model event type(s): llm.request.begin, llm.response.done — Qoder's log format has changed
+```
+
+Every failure is also appended to `errors.jsonl` in the plugin data directory.
 ## The desktop strip (no model involved)
 
 `dashboard/overlay.ps1` renders the archived line on an always-on-top strip, so the
@@ -69,13 +87,17 @@ background sub-sessions (recap generation, memory extraction) in the same projec
 directory that are frequently newer than the real one and own no transcript.
 `$QODER_SESSION_ID` is not exported to hook or tool shells either.
 
+Exit codes: `0` with a line (or with nothing, when the turn simply has no model
+requests yet), `2` when the log cannot be read or parsed. Never treat a `2` as an
+empty turn — that distinction is the whole point of the code.
+
 On Windows the same entry point is `bin/token-stats.cmd token-stats <flags>`.
 
 ## What each field measures
 
 | Field | Source |
 | --- | --- |
-| `tok/s(本轮)` | tokens ÷ summed model-request time for the turn |
+| `tok/s(本轮)` | tokens ÷ summed model-request time, measured up to the model's own `--current` call |
 | `首字` | turn start → first `tool.requested` / `model.response.completed` |
 | `输出 tok` | transcript assistant text + thinking + tool arguments |
 | `生成` | sum of `model.request.started` → `model.response.completed` gaps |
@@ -84,6 +106,11 @@ On Windows the same entry point is `bin/token-stats.cmd token-stats <flags>`.
 Wall-clock time is longer than `生成` because tool execution and permission
 prompts are excluded. Segments under 200 ms are dropped as bookkeeping artefacts
 rather than counted as generation.
+
+A `turn_id` is **not** one user message: `turn.started` and
+`input.prompt.submitted` can repeat under it (the author's logs contain a turn
+with three of each). The window therefore starts at the last prompt at or before
+the measurement boundary.
 
 ## Token counts are real only with QODERCN_EXPOSE_TOKEN_USAGE
 
@@ -95,21 +122,36 @@ drops the `~` prefix and reports the real value — nothing to configure here.
 Verified 2026-09-20: with the flag on, `tokenSource` flipped to `reported` and one
 turn showed 976 real output tokens against 565 from the character heuristic, so
 estimates undercount by roughly 42% and a `~` number is a floor, not a
-measurement.
+measurement. Across 13 turns the measured undercount was 37.5%.
 
 Without the flag, numbers are counted from transcript text (CJK characters ≈ 1
 token each, latin runs ≈ 1 word each) and carry a `~` prefix. Say which of the two
-you are quoting when the difference matters.
+you are quoting when the difference matters. A session spanning a flag flip is
+reported as `mixed` and its whole cumulative carries `~` — never present a mixed
+total as measured.
 
 `首字` is likewise an upper bound: Qoder logs no first-token event, so this is
-turn start → first tool call or completed response, not a measured TTFT.
+turn start → first tool call or completed response, not a measured TTFT. For a
+single-segment turn it equals the whole generation time, so it says nothing about
+latency there.
+
+## Known failure modes
+
+- **The line is missing.** Check `errors.jsonl` in the plugin data directory
+  before assuming the model skipped the quote. `no-session-log` and
+  `unknown-log-format` are recorded there; the latter means Qoder renamed its
+  events and `runtime/schema.mjs` needs the new names.
+- **The number looks too small.** Look for a `warning` on the turn: it means the
+  model ran the measurement before finishing its answer.
+- **A turn is missing from `history.jsonl`.** Archiving is per-turn and
+  idempotent; a turn with no tokens and no segments is not archived, which is
+  correct for a turn that never reached the model.
 
 ## Data locations
 
 - events: `~/.qoder-cn/logs/sessions/<project>/<session>/segments/*.jsonl`
 - transcript: `~/.qoder-cn/projects/<project>/<session>.jsonl`
-- hook archive: `~/.qoder-cn/plugins/data/token-stats-*/{history.jsonl,latest.md,latest.json,state.json}`
+- hook archive: `$QODER_PLUGIN_DATA` (or `~/.qoder-cn/plugins/data/token-stats-*/`) containing `history.jsonl`, `latest.json`, `latest.md`, `state.json`, `errors.jsonl`
 
-The data directory is `$QODER_PLUGIN_DATA`, which Qoder names
-`<plugin name>-<marketplace>` — here `token-stats-local`, not `token-stats`. Glob
-it rather than hard-coding.
+The data directory is `<plugin name>-<marketplace>` — here `token-stats-local`, not
+`token-stats`. Glob it rather than hard-coding.

@@ -58,7 +58,7 @@ node scripts/install.mjs --uninstall            # 移除插件并清掉该环境
 node scripts/install.mjs --uninstall --keep-env # 保留环境变量
 ```
 
-已设过该变量时重复执行不会覆盖。卸载时把它写成 `0` 而不是删除条目，方便你在注册表里看到改动痕迹。
+已设过该变量时重复执行不会覆盖。卸载会**删除**这个值（而不是像早先那样写成 `0`），并回读注册表确认已清掉。
 
 ### 重启后 `~` 前缀没消失
 
@@ -79,16 +79,52 @@ Qoder 还在运行时该脚本会拒绝执行——因为第二个实例只会�
 | 路径 | 作用 |
 | --- | --- |
 | `.qoder-plugin/plugin.json` | 插件清单 |
-| `hooks/hooks.json` | 注册 `Stop` 钩子 |
+| `hooks/hooks.json` | 注册 `UserPromptSubmit` 和 `Stop` 两个钩子 |
 | `bin/token-stats.cmd` | Windows 包装脚本，先解析 JS 运行时再执行 `runtime/*.mjs` |
-| `runtime/stats.mjs` | 解析 Qoder 会话日志、计算各项指标 |
+| `runtime/schema.mjs` | **所有借用自 Qoder 的名字集中在这一处**：事件类型、payload 字段、目录命名规则，以及检测格式变化的探测层 |
+| `runtime/stats.mjs` | 解析 Qoder 会话日志、计算各项指标（唯一的实现） |
+| `runtime/archive.mjs` | 插件自己的归档：原子写、咨询锁、`state.json`/`latest.json`/`history.jsonl`/`errors.jsonl` |
 | `runtime/prompt-submit.mjs` | `UserPromptSubmit` 钩子：给本轮打时间戳，并注入显示指令 |
 | `runtime/stop-stats.mjs` | `Stop` 钩子：归档本轮统计行 |
 | `runtime/token-stats.mjs` | CLI（`--current --key <k>` 给模型收尾用，`--session` 查历史） |
+| `scripts/test.mjs` | `node scripts/test.mjs` —— 25 个测试，零依赖 |
+| `scripts/make-fixtures.mjs` | 从真实的 `~/.qoder-cn` 重新生成 `tests/fixtures/` |
 | `skills/token-stats/SKILL.md` | 教会 agent 怎么跑、怎么解释这些数字 |
 | `dashboard/overlay.ps1` | 可选的桌面置顶悬浮条（完全不经过模型） |
 | `dashboard/overlay.cmd` | 上面那个脚本的双击入口 |
 | `scripts/install.mjs` | 写入用户插件注册表（改前留 `.bak` 备份） |
+
+## 测试
+
+```bash
+node scripts/test.mjs
+```
+
+跑的是从真实会话日志脱敏裁出来的 fixture，覆盖：会话第一轮、纯文字无工具轮、
+含网络重试轮、估算与实测混合的会话、一个 `turn_id` 跨三条用户消息、损坏/半行日志，
+以及失败路径：认不出的事件类型、会话不存在、state 并发写、归档与引用是否一致。
+不引第三方包，`git clone` 就是完整安装。
+
+## 那行数字从哪来、排除了什么
+
+统计从 Qoder 自己的事件日志里量出来，**量到模型运行 `--current` 命令的那一刻为止**——
+注入的指令要求把这条命令放在最后，也就是总结写完、正文打完之后。所以这一行描述的是
+整轮减去「引用它自己的那句话」。
+
+这个边界很要紧。早先的版本要求**先**运行命令再写总结，于是把总结本身悄悄排除掉了：
+在作者的日志上那是**平均 32% 的一轮**，30 轮实测里 30 轮都和归档数字对不上。现在聊天行
+和归档行由同一个函数、同一个边界算出来，两者完全一致。
+
+如果模型还是提前运行了命令（回答没写完就跑了），这一轮会被**标记**而不是当成完整轮汇报：
+CLI 往 stderr 写 `warning: 统计命令在本轮结束前 Ns 就被调用，漏掉 M tok（约 P%）`，
+归档把警告记进 `warnings`，悬浮条追加 `⚠ 数字偏小（统计早于回答结束）` 并把整行显示成琥珀色。
+
+## 这个插件不会做的事
+
+- **不会为读不懂的日志打印 0。** 如果 Qoder 改了事件名，CLI 以退出码 2 结束并在 stderr
+  写明 `Qoder's log format has changed`，`Stop` 钩子把失败记进 `errors.jsonl`。这替换掉了
+  原来那个静默 `exit 0`——它让「日志读不懂」和「这一轮没数据」变得无法区分。
+- **不会把上一轮当成本轮。** 只要本轮的 model 请求全部早于本轮自己的时间戳，就一律不输出。
 
 ## 改了代码不想重装
 
@@ -110,9 +146,13 @@ Qoder 会把结构化事件追加到 `~/.qoder-cn/logs/sessions/<项目>/<会话
 `model.request.started` → `model.response.completed`。生成秒数是所有段时长之和，
 所以工具执行和权限等待的时间**不计入**。
 
+`turn_id` **不等于**一条用户消息：同一个 `turn_id` 下 `turn.started` 和
+`input.prompt.submitted` 都可能重复出现（作者日志里就有一轮各出现三次）。所以测量窗口
+从「边界时刻之前的最后一次 prompt」开始，而不是从 `turn_id` 的第一个事件开始。
+
 各段的 token 数来自会话 transcript（`~/.qoder-cn/projects/<项目>/<会话>.jsonl`），
 按 assistant 的 `message.id` 分组，再用时间戳最近邻配对到各个段——因为存在重试和失败请求，
-两边的数量会不相等，按位置硬对齐会漂移。
+两边的数量会不相等，按位置硬对齐会漂移。`model.request.attempt_failed` 本身不算一段。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -128,37 +168,62 @@ Qoder 会把结构化事件追加到 `~/.qoder-cn/logs/sessions/<项目>/<会话
 计数，结果前面加 `~` 标记。一旦网关开始返回真实 usage，插件会自动改用真实值，`~` 也随之消失，
 不需要任何配置。
 
+跨越开关的会话会报 `token 来源: 混合`，并把**整条累计**加 `~`，而不是把两种来源混成一个不带标记的数。
+
 `首字` 同理：Qoder 并不记录「首 token」事件，取的是「轮开始 → 第一次工具调用或整段响应完成」，
-所以它是首字耗时的**上界**，不是实测值。
+所以它是首字耗时的**上界**，不是实测值——对单段轮次它整好等于整段生成时间（作者归档的 43 轮里有
+16 轮如此）。行上不做标记，请按「不会早于此」理解。
 
 ## 统计行是怎么显示出来的
 
-Qoder 插件没有 UI 扩展点，而 `Stop` 钩子的 stdout 会被包成 SDK 的 `hook_response` 消息，
-客户端并不渲染。所以那行可见的文字是**让模型自己打出来的**：
+Qoder 插件没有 UI 扩展点。客户端只认 `hook_started` / `hook_progress` / `hook_response`
+三种钩子事件，画出来的 part 只有 `{id, event, status, exitCode, startedAt, completedAt}`——
+**没有文字字段**——所以钩子往 stdout 写什么都进不了聊天面板（已在 Qoder CN 0.3.4 的
+`app.asar` 里核实）。那行可见的文字因此是**让模型自己打出来的**：
 
 ```
 UserPromptSubmit ──为本轮生成 key，写入 state.json──┐
                                                      └─additionalContext：
-                                「收尾时运行 token-stats --current --key <本轮 key>，
+                                「先写完总结，然后运行 token-stats --current
+                                  --key <本轮 key>，把它作为最后一个动作，
                                   把输出原样引用到回复末尾」
-模型做完工具 → 运行 token-stats --current --key … → 用引用块贴出这一行
+模型做完工具 → 写完总结 → 运行 CLI → 用引用块贴出这一行
 Stop          → 把同一行归档到 history.jsonl / latest.md
 ```
 
 每轮一个 12 位十六进制 key，模型读回的是自己那条记录，不再和别的会话抢同一个槽位。
 之前正是这个抢槽位让**会话的第一轮永远不显示**：那一轮 transcript 还没落盘，旧的
 「这是不是真实会话」探测判定失败，指令根本没注入。不带 key 的 `--current` 仍然可用——
-它回落到「最近一次拥有 transcript 的会话」记录的轮次，后台子会话动不了这个槽位。
-两种情况下，只要本轮还没有属于自己的 model 请求，就一律不输出，绝不会把上一轮的数字当本轮显示。
+它回落到「最近一次拥有 transcript 的会话」记录的轮次。两种情况下，只要本轮还没有属于自己的
+model 请求，就一律不输出，绝不会把上一轮的数字当本轮显示。
 
 这套设计直接来自 [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor)——
 它面对的是同一个「钩子画不了 UI」的问题，用的是同一个解法。
 
-`Stop` 钩子仍是可靠的归档来源：它从 payload 里读 `session_id`、`transcript_path` 和
-`parent_business_info.begin_at` 来锁定刚结束的那一轮，写出 `history.jsonl`、`latest.md`、
+`Stop` 钩子仍是可靠的归档来源。它算的是**和 CLI 完全相同的窗口**——两者都停在模型自己那次
+`--current` 调用上，而这个边界是从日志里查出来的、不是互相传递的——所以归档的那行和引用的
+那行永远是同一个数。归档按轮幂等；后台子会话（没有 transcript）会记进历史，但绝不覆盖
 `latest.json`。
 
-关闭注入：在 `~/.qoder-cn/token-stats.config.json` 写入 `{ "tokenRateLine": false }`。
+## 出问题了看哪
+
+失败会被记下来，不再被吞掉。三个地方：
+
+| 文件 | 内容 |
+| --- | --- |
+| `errors.jsonl` | 每次失败，带 `kind`：`unknown-log-format`、`no-session-log`、`state-write-failed`、`archive-failed` … |
+| `history.jsonl` | 每一轮一行归档，含 `warnings` 数组 |
+| `latest.json` | 最新那一行，附带它的 `warnings` |
+
+读得懂但解析不了的日志绝不会被报成 0。CLI 以退出码 2 结束，并把原因写到 stderr：
+
+```
+$ token-stats --session <id>
+token-stats: unrecognised model event type(s): llm.request.begin, llm.response.done — Qoder's log format has changed
+```
+
+只想关掉注入指令、保留归档：在 `~/.qoder-cn/token-stats.config.json` 写入
+`{ "tokenRateLine": false }`。
 
 ## 桌面悬浮条（可选）
 
@@ -175,14 +240,34 @@ powershell -NoProfile -File dashboard\overlay.ps1 -Stop     # 关掉
 
 按住可以直接拖到任意位置，位置会被记住；右键有关闭菜单。首次启动它会贴在 Qoder
 窗口右下角，并且通过采样那个窗口的边缘亮度在深/浅两套配色间自动切换，两种主题下都看得清。
-它默认找 `Qoder CN` 这个进程名，可用 `-ProcessName` 改；插件数据目录不在默认位置时用 `-DataDir` 指。
+它默认找 `Qoder CN` 这个进程名，可用 `-ProcessName` 改。数据目录按
+`$env:QODER_PLUGIN_DATA` → `$env:QODER_HOME\plugins\data\token-stats-local` →
+`~/.qoder-cn/...` 的顺序取默认值，也可用 `-DataDir` 指。
+
+归档行带警告时（模型在总结之前就量了数），悬浮条会追加琥珀色的
+`⚠ 数字偏小（统计早于回答结束）`，而不是把偏小的数字当成完整值显示。
 
 条上写的是 `(上一轮)` 而不是 `(本轮)`：归档是在一轮**结束**时才写的，所以回答正在往外吐的
-时候，条上显示的还是上一轮那一行。
+时候，条上显示的还是上一轮那一行。拖到第二块显示器时，悬浮条会跟随它所在的那块屏。
+
+## 改了代码不想重装
+
+`install.mjs` 是往 `plugins/cache/local/` 里拷一份**快照**，并在 `SOURCE` 文件里记下源码目录。
+改完之后二选一：
+
+```bash
+node scripts/install.mjs                                  # 重新同步快照
+set TOKEN_STATS_SOURCE=<本仓库的绝对路径>                  # 或直接跑源码目录
+```
+
+设置了 `TOKEN_STATS_SOURCE` 之后，`bin/token-stats.cmd` 会执行源码目录里的 `runtime/*.mjs`
+而不是安装副本。日常使用记得把这个变量去掉。
 
 ## 实测数据
 
-在作者机器上的真实会话跑出来的结果，包含两个历史 Bedrock mod 会话：
+在作者机器上的真实会话上跑出来的结果：224 个会话日志目录、27 个有完整轮次的会话、
+55 次 `Stop` 触发、51 次 `UserPromptSubmit` 触发。下表由 CLI 在审计时输出；驱动这次重构的
+那些数字（调用窗口少算、归档丢失、用户消息复用、重试轮）都记录在本仓库的提交历史里。
 
 | 会话 | tok/s | 首字 | 输出 | 生成 | 段 | 峰 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -193,8 +278,10 @@ powershell -NoProfile -File dashboard\overlay.ps1 -Stop     # 关掉
 ## 已知限制
 
 - **聊天里那行统计依赖模型配合。** 那是一串注入指令，不是渲染出来的控件——模型忽略它，这一行就不出现。
-  Qoder 插件只能提供 hooks、MCP server 和 skill，没有 UI 扩展点，插件内部无法往聊天面板里画常驻控件。
+  作者日志上的实测：指令覆盖到的轮次里 80% 真的跑了 CLI，57% 的回答里出现了那段引用块。
   绕开办法就是 `dashboard/overlay.ps1`：一条桌面悬浮条，直接读归档好的那一行。
+- **这一行排除了模型在命令之后写的内容。** 指令要求把命令放最后，于是只有那句引用被排除——
+  在作者日志上约占一轮的 7%。模型提前运行会被标记，但数字仍然偏小。
 - **token 总量目前是估算值，但原因是 Qoder 主动隐藏，不是网关没给。** 客户端源码实证：
 
   ```js
@@ -210,10 +297,13 @@ powershell -NoProfile -File dashboard\overlay.ps1 -Stop     # 关掉
   `QODERCN_EXPOSE_TOKEN_USAGE=1`（接受 `1`/`true`/`yes`/`on`），真实数值就会原样进日志；
   本插件会**自动**切到真值，`~` 前缀消失，插件侧无需任何配置。
   **2026-09-20 实测已验证**：打开开关后同一轮真实输出 976 tok、字符估算只有 565，即低估约 42%。
+  13 轮汇总实测低估 37.5%。
 
   在那之前按字符估算：中日韩 1 字/token、拉丁词 1 词/token（含正文+thinking+工具参数），结果加 `~`。
   代码密集的轮次估算会偏——分词器对标点、缩进、标识符的计法与词数启发式差别较大。
-- **`首字` 是上界。** Qoder 不记录首 token 事件，取的是「轮开始 → 首次工具调用或整段响应完成」。
+- **`首字` 是上界**，对单段轮次它整好等于整段生成时间。Qoder 不记录首 token 事件。
+- **会话第一轮最脆弱。** 它的 transcript 要到回答开始才落盘，而且后台子会话会在同一目录触发
+  `UserPromptSubmit`。每轮独立 key 和锁覆盖了这一点，但真要是少了一行，先查这个场景。
 
 ## 许可证
 
