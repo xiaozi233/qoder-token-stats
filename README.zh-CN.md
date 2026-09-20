@@ -309,9 +309,10 @@ set TOKEN_STATS_SOURCE=<本仓库的绝对路径>                  # 或直接�
   `UserPromptSubmit`。每轮独立 key 和锁覆盖了这一点，但真要是少了一行，先查这个场景。
 - **少一行不等于数字错，先确认钩子到底跑没跑。** 在 Qoder 运行时替换插件的版本目录，钩子会以
   `Plugin directory does not exist` 失败，而那一轮**根本不会归档**——结果是聊天有行、归档没有行。
-  `errors.jsonl` 报不了这种失败：进程没启动，自然写不出日志。要查只能筛 Qoder 自己的
-  `hook.finished` 事件（`hook_name` 存在且 `success === false`），别按错误文本 grep——
-  本仓库那份提示词的正文会被回写进同样的日志，一搜就命中自己。
+  整轮**以错误结束**时 `Stop` 压根不触发：日志里正常收尾是 `QueryEnd:end_turn`，出错收尾是
+  `QueryEnd:error`。所以"少一行"至少两种成因，日志能分开它们。两种都不会在 `errors.jsonl` 留痕
+  （没跑起来的进程写不出日志），证据只在 Qoder 自己的钩子事件里，要按字段筛（`hook_name` 存在且
+  `success === false`），别按错误文本 grep——本仓库那份提示词的正文会被回写进同样的日志，一搜就命中自己。
 
 ## 许可证
 

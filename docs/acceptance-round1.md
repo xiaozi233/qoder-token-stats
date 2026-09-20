@@ -332,6 +332,18 @@ Qoder 只把它记在会话日志的 `hook.finished` 里。所以"没有 `errors
 **事后**判定，只能由 Stop 钩子（或更晚的 `--session` 查询）给出。两份 README 原文说
 "CLI 往 stderr 写 warning"，对 `--current` 这条路径并不成立，已改。
 
-**仍未目视确认**：悬浮条上那行是否真的转成琥珀色（`overlay.ps1:287-291` 那三行渲染）。
-归档侧的 `warnings` 已实测非空，颜色只有人能看到。
+**目视确认（维护者本人）：琥珀色成立。** 观察窗口是 `16:04:04`（告警行写入 `latest.json`）
+到 `16:11:18`——而且这个窗口意外地长，原因见下面的 D10。看到的确实是真实数据，
+没有为了看颜色而伪造过任何行。
+
+**D10 — "少一行"有两种成因，日志能分开。** 上一轮（边界 `⏱ 16:08:20`）没有留下归档行，
+也没有覆盖 `latest.json`。查日志：`16:04:04.387 Stop token-stats@local success=true exit=0 dur=498ms`
+是最后一次 Stop；之后就**再没有 Stop 事件**，下一批是 `16:11:18 QueryEnd:error`。即那一轮
+**以错误结束**，Qoder 走 `QueryEnd:error` 而不触发 Stop。所以：
+
+- 钩子**执行了但失败** → `hook.finished` 里 `success: false`（D6/D7 那一类）；
+- 整轮**出错收尾** → `QueryEnd:error`，Stop 压根不触发，`errors.jsonl` 同样为空；
+- 正常收尾 → `QueryEnd:end_turn` + `Stop`。
+
+这两类都不会在 `errors.jsonl` 留痕，而"没有 `errors.jsonl`"曾被当成健康的证据——**它不能**。
 

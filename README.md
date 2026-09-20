@@ -342,11 +342,13 @@ measurements recorded in this repository's history.
 - **A missing line is not a wrong number — check whether the hook ran at all.**
   Replacing the plugin's version directory while Qoder is running makes the hook
   fail with `Plugin directory does not exist`, and that turn is never archived: the
-  chat line ends up with no row behind it. `errors.jsonl` cannot report this,
-  because a process that never started writes nothing. The failure only exists in
-  Qoder's own `hook.finished` events, so filter on their fields (a `hook_name` is
-  present and `success` is `false`) rather than grepping the message text — the
-  prompt that describes this failure is itself echoed into those same logs.
+  chat line ends up with no row behind it. A turn that ends in an error never fires
+  `Stop` in the first place — Qoder logs `QueryEnd:error` where a clean turn logs
+  `QueryEnd:end_turn` — so a missing row has at least two causes and the log tells
+  them apart. Neither reaches `errors.jsonl`, because a hook that never ran writes
+  nothing; the evidence lives only in Qoder's own hook events, so filter on their
+  fields (a `hook_name` is present and `success` is `false`) rather than grepping
+  the message text, which self-matches on this repository's own prompt.
 
 ## License
 
