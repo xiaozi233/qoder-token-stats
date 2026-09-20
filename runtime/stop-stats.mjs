@@ -9,9 +9,10 @@
 // Every outcome is recorded. "This turn had nothing to measure" and "the log
 // could not be read" are different things and no longer share a silent exit 0.
 
+import fs from 'node:fs';
 import process from 'node:process';
 import { appendError, archiveTurn } from './archive.mjs';
-import { computeStats, formatTurnLine } from './stats.mjs';
+import { computeStats, formatTurnLine, measurable } from './stats.mjs';
 import { qoderHome } from './schema.mjs';
 
 function readStdin() {
@@ -67,22 +68,37 @@ if (!turn) {
   process.exit(0);
 }
 
-// A background sub-session (recap, memory extraction) fires Stop in the same
-// cwd and owns no transcript. Its turn is still worth recording in history, but
-// it must not overwrite latest.json — that would put a sub-session's numbers on
-// the overlay in place of the user's own last turn.
-const background = !payload.transcript_path;
+// A turn with nothing measured is bookkeeping, not a measurement — the CLI
+// prints nothing for one, so archiving one would leave a row in history that no
+// chat line can ever correspond to.
+if (!measurable(turn)) {
+  appendError('stop:nothing-measured', `turn ${turn.turnId} produced no output tokens and no ratable segment`, {
+    sessionId: payload.session_id,
+  });
+  process.exit(0);
+}
+
+// A background sub-session (recap, memory extraction) fires Stop in the same cwd
+// and owns no transcript. Its turn is still worth recording in history, but it
+// must not replace the user's own last turn on the overlay. Presence of the
+// field is not the test: Qoder hands these runs a transcript_path that does not
+// exist, which is also exactly how a real session's first turn looks — so ask
+// the filesystem, not the payload.
+const realSession = Boolean(payload.transcript_path) && fs.existsSync(payload.transcript_path);
 
 const line = formatTurnLine(stats);
 try {
-  archiveTurn({ stats, line, warnings: turn.warnings || [], source: turn.window?.source || 'end' }, qoderHome());
+  archiveTurn(
+    { stats, line, warnings: turn.warnings || [], source: turn.window?.source || 'end', writeLatest: realSession },
+    qoderHome(),
+  );
 } catch (error) {
   appendError('stop:archive-failed', String(error && error.message), { sessionId: payload.session_id });
   process.stderr.write(`token-stats: could not archive: ${error && error.message}\n`);
   process.exit(1);
 }
 
-if (background) process.exit(0);
+if (!realSession) process.exit(0);
 
 process.stdout.write(`${line}\n`);
 process.exit(0);

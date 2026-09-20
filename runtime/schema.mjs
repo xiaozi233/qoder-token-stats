@@ -31,6 +31,27 @@ export function sanitizeProject(dir) {
   return String(dir).replace(/[^A-Za-z0-9-]/g, '-');
 }
 
+// The transcript a session owns, if one exists. Qoder's background sub-sessions
+// (recap generation, memory extraction) never write one, and that is the only
+// signal that separates them from the user's own session. It is a signal that
+// only becomes readable over time: a real session has no transcript yet at the
+// moment its first prompt is submitted, so anything decided at prompt time is a
+// false negative for every session's first turn.
+export function findTranscript(home, sessionId, cwd) {
+  if (!sessionId) return null;
+  const root = projectsRoot(home);
+  if (!fs.existsSync(root)) return null;
+  if (cwd) {
+    const direct = path.join(root, sanitizeProject(cwd), `${sessionId}.jsonl`);
+    if (fs.existsSync(direct)) return direct;
+  }
+  for (const project of fs.readdirSync(root)) {
+    const candidate = path.join(root, project, `${sessionId}.jsonl`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 export function sessionsRoot(home = qoderHome()) {
   return path.join(home, 'logs', 'sessions');
 }

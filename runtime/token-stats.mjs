@@ -12,12 +12,13 @@
 // from "the log could not be read".
 
 import process from 'node:process';
-import { appendError, readState, selectTurn } from './archive.mjs';
+import { appendError, readState, selectCurrentTurn, selectTurn } from './archive.mjs';
 import {
   computeStats,
   formatNumber,
   formatStatsLine,
   formatTurnLine,
+  measurable,
   qoderHome,
   recentSessions,
 } from './stats.mjs';
@@ -70,7 +71,11 @@ const home = qoderHome();
 const cwd = args.cwd || process.cwd();
 
 if (args.current) {
-  const turnRecord = selectTurn(readState(home), args.key);
+  const state = readState(home);
+  // With a --key, read back exactly the turn the hook minted it for. Without
+  // one, the newest recorded turn has to prove it belongs to a real session —
+  // a background sub-session's turn is not the user's "current" anything.
+  const turnRecord = args.key ? selectTurn(state, args.key) : selectCurrentTurn(state, home);
   // Nothing to report is a normal outcome, not an error: the turn may simply
   // not have produced a model request yet.
   if (!turnRecord || !turnRecord.sessionId) process.exit(0);
@@ -82,7 +87,7 @@ if (args.current) {
   });
   if (stats.error) fail(`current:${stats.error}`, stats.detail || stats.error, 2);
   const turn = stats.turn;
-  if (!turn || !turn.tokens || !turn.segments || turn.noSegmentsInWindow) process.exit(0);
+  if (!measurable(turn)) process.exit(0);
   process.stdout.write(`${formatTurnLine(stats)}\n`);
   process.exit(0);
 }

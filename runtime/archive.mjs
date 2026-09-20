@@ -7,7 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDir, qoderHome } from './schema.mjs';
+import { dataDir, findTranscript, qoderHome } from './schema.mjs';
 
 export function archivePaths(home = qoderHome()) {
   const dir = dataDir(home);
@@ -189,6 +189,24 @@ export function selectTurn(state, key) {
   return Number.isFinite(state.promptAt) ? state : null;
 }
 
+// A keyless query. Qoder's background sub-sessions are a real hazard here: they
+// fire UserPromptSubmit in the same project, so a "newest entry wins" rule hands
+// the user a recap run's turn. Transcript ownership is therefore re-checked at
+// read time rather than trusted from the flag the hook wrote — at prompt time a
+// new session has no transcript yet, so that flag is false for every session's
+// first turn, and trusting it pinned this query to the previous session.
+export function selectCurrentTurn(state, home = qoderHome()) {
+  if (!state) return null;
+  const turns = Array.isArray(state.turns) ? state.turns : [];
+  const owners = new Set(turns.filter((t) => t && t.realSession && t.sessionId).map((t) => t.sessionId));
+  const candidates = turns.filter((t) => t && Number.isFinite(t.promptAt));
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const t = candidates[i];
+    if (owners.has(t.sessionId) || findTranscript(home, t.sessionId, t.cwd)) return t;
+  }
+  return Number.isFinite(state.promptAt) ? state : null;
+}
+
 // --- archive ----------------------------------------------------------------
 
 function turnKey(entry) {
@@ -199,7 +217,13 @@ function turnKey(entry) {
 // history the CLI reports. Idempotent per turn, so a turn whose Stop hook fires
 // twice (or whose model quoted a line that Stop then re-derives identically)
 // does not produce two rows.
-export function archiveTurn({ stats, line, warnings = [], source = 'stop' }, home = qoderHome()) {
+//
+// `writeLatest` is false for a background sub-session's turn. Such a turn is
+// still worth a history row, but letting it rewrite latest.json puts a recap
+// run's numbers on the overlay in place of the user's own last turn — measured
+// at 28% of archived rows in the reference install, because Qoder runs a recap
+// or a memory extraction after most turns.
+export function archiveTurn({ stats, line, warnings = [], source = 'stop', writeLatest = true }, home = qoderHome()) {
   const p = archivePaths(home);
   const at = new Date().toISOString();
   const entry = {
@@ -217,6 +241,7 @@ export function archiveTurn({ stats, line, warnings = [], source = 'stop' }, hom
     const key = turnKey(entry);
     const duplicate = recent.find((row) => turnKey(row) === key);
     if (!duplicate) appendJsonl(p.history, entry);
+    if (!writeLatest) return entry;
     const md = [
       `# ${line}`,
       '',

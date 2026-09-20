@@ -13,9 +13,9 @@ import {
   field,
   isType,
   cliInvocation,
+  findTranscript,
   probe,
   qoderHome,
-  projectsRoot,
   sanitizeProject,
   sessionsRoot,
 } from './schema.mjs';
@@ -86,10 +86,6 @@ function findSessionDir(home, sessionId, cwd) {
   return findIn(sessionsRoot(home), sessionId, cwd, '');
 }
 
-function findTranscriptPath(home, sessionId, cwd) {
-  return findIn(projectsRoot(home), sessionId, cwd, '.jsonl');
-}
-
 function loadEvents(sessionDir) {
   const dir = path.join(sessionDir, 'segments');
   if (!fs.existsSync(dir)) return [];
@@ -138,6 +134,13 @@ function assistantResponses(transcriptPath) {
 // call. Deriving it from the log (not from a hand-off) is what makes the CLI
 // and the Stop hook agree to the byte — both see the same call, so both stop at
 // the same place. Only the short quote the model writes afterwards is excluded.
+//
+// The timestamp taken is the latest event carrying that command, which in
+// practice is `tool.shell.started` (the shell actually starting, ~3s after
+// `tool.requested`). That lateness is load-bearing: the answering segment's
+// response.completed lands tens of milliseconds *after* the tool request, so a
+// boundary taken at the request would classify the whole answer as "after the
+// call" and drop it.
 function quoteBoundary(events) {
   let at = null;
   for (const e of events) {
@@ -334,7 +337,7 @@ export function computeStats(options = {}) {
     .filter((t) => Number.isFinite(t.start))
     .sort((a, b) => a.start - b.start);
 
-  const transcriptPath = options.transcriptPath || findTranscriptPath(home, sessionId, options.cwd);
+  const transcriptPath = options.transcriptPath || findTranscript(home, sessionId, options.cwd);
   const responses = assistantResponses(transcriptPath);
   const build = (t) => buildTurnMetrics(t.id, t.events, responses, { afterMs: options.afterMs });
   const all = ordered.map(build);
@@ -387,6 +390,15 @@ export function computeStats(options = {}) {
   };
 }
 
+// A turn with no output tokens and no ratable segment is bookkeeping, not a
+// measurement — a background sub-session's turn, or one that never reached the
+// model. The CLI prints nothing for it, so the Stop hook must archive nothing
+// for it either: the two used to disagree, leaving rows in history that no chat
+// line could ever correspond to.
+export function measurable(turn) {
+  return Boolean(turn && turn.tokens > 0 && turn.segments > 0 && !turn.noSegmentsInWindow);
+}
+
 const NUM = new Intl.NumberFormat('en-US');
 
 export function recentSessions(home, cwd, limit = 5) {
@@ -401,7 +413,7 @@ export function recentSessions(home, cwd, limit = 5) {
     if (!fs.existsSync(path.join(dir, 'segments'))) continue;
     const stat = fs.statSync(dir);
     const stats = computeStats({ home, sessionId: entry.name, cwd });
-    const transcript = Boolean(findTranscriptPath(home, entry.name, cwd));
+    const transcript = Boolean(findTranscript(home, entry.name, cwd));
     const turnCount = stats.turns?.length || 0;
     out.push({
       sessionId: entry.name,

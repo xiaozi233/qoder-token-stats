@@ -11,9 +11,18 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { computeStats, formatTurnLine, estimateTokens } from '../runtime/stats.mjs';
+import { computeStats, formatTurnLine, estimateTokens, measurable } from '../runtime/stats.mjs';
 import { probe, sanitizeProject } from '../runtime/schema.mjs';
-import { archiveTurn, readLatest, readState, recordTurn, selectTurn, withLock, readJsonl } from '../runtime/archive.mjs';
+import {
+  archiveTurn,
+  readLatest,
+  readState,
+  recordTurn,
+  selectCurrentTurn,
+  selectTurn,
+  withLock,
+  readJsonl,
+} from '../runtime/archive.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -73,6 +82,37 @@ function sessionIdOf(caseName) {
 
 function runCli(args, env = {}) {
   return spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+}
+
+// Feed a hook script the JSON payload Qoder would pipe into it.
+function runHook(script, payload, home) {
+  return spawnSync(process.execPath, [path.join(root, 'runtime', script)], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: { ...process.env, QODER_HOME: home },
+  });
+}
+
+function archived(home) {
+  const dir = path.join(home, 'plugins', 'data', 'token-stats-local');
+  return { dir, history: path.join(dir, 'history.jsonl'), latest: path.join(dir, 'latest.json') };
+}
+
+// One QODER_HOME holding both halves of the real hazard: the user's session,
+// which owns a transcript, and a background sub-session, which never will.
+function homeWithTwoSessions(realCase, backgroundCase) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-bgsessions-'));
+  for (const name of [realCase, backgroundCase]) {
+    fs.cpSync(
+      path.join(FIXTURES, name, 'logs', 'sessions', 'F--fixture-project', name),
+      path.join(dir, 'logs', 'sessions', 'F--fixture-project', name),
+      { recursive: true },
+    );
+  }
+  const dest = path.join(dir, 'projects', 'F--fixture-project', `${realCase}.jsonl`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'shared', 'transcript.jsonl'), dest);
+  return dir;
 }
 
 section('format probing');
@@ -231,6 +271,92 @@ test('archiving the same turn twice does not duplicate the row', () => {
   archiveTurn({ stats, line, source: 'stop' }, home);
   const rows = readJsonl(path.join(home, 'plugins', 'data', 'token-stats-local', 'history.jsonl'));
   assert.equal(rows.length, 1, `expected 1 row, got ${rows.length}`);
+});
+
+section('what may reach the archive');
+
+test('a turn with nothing measured is refused, not archived as zero', () => {
+  // This turn predates the usage flag and its transcript is withheld, so there
+  // is nothing reported and nothing to estimate from: tokens is 0.
+  const home = homeFor('session-first-turn');
+  const id = sessionIdOf('session-first-turn');
+  const turn = computeStats({ home, sessionId: id }).turn;
+  assert.equal(turn.tokens, 0, 'fixture must measure nothing without its transcript');
+  assert.equal(measurable(turn), false);
+});
+
+test('the CLI and the Stop hook agree that a nothing-measured turn has no line', () => {
+  const id = sessionIdOf('session-first-turn');
+
+  const cliHome = homeFor('session-first-turn');
+  recordTurn({ key: 'k', sessionId: id, promptAt: 1000, cwd: 'F:\\fixture-project', realSession: false }, cliHome);
+  const cli = runCli(['--current', '--key', 'k'], { QODER_HOME: cliHome });
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(cli.stdout, '', 'the CLI must not print a number when there is none');
+
+  // The Stop hook used to archive a row anyway, leaving history entries that no
+  // chat line could ever correspond to.
+  const hookHome = homeFor('session-first-turn');
+  const hook = runHook('stop-stats.mjs', { session_id: id, cwd: 'F:\\fixture-project' }, hookHome);
+  assert.equal(hook.status, 0, hook.stderr);
+  assert.equal(hook.stdout, '');
+  assert.equal(fs.existsSync(archived(hookHome).history), false, 'no history row either');
+  assert.equal(fs.existsSync(archived(hookHome).latest), false, 'and nothing for the overlay');
+  // Pinned to this reason, so a different guard firing cannot hide a regression.
+  const errors = readJsonl(path.join(archived(hookHome).dir, 'errors.jsonl'));
+  assert.equal(errors.at(-1).kind, 'stop:nothing-measured');
+});
+
+test('a turn can be recorded without taking over latest.json', () => {
+  const home = homeFor('no-tool-turn');
+  const id = sessionIdOf('no-tool-turn');
+  const stats = computeStats({ home, sessionId: id });
+  archiveTurn({ stats, line: formatTurnLine(stats), source: 'stop', writeLatest: false }, home);
+  assert.equal(readLatest(home), null, 'latest.json must be untouched');
+  assert.equal(readJsonl(archived(home).history).length, 1, 'its row still belongs in history');
+});
+
+test('a background sub-session does not take the overlay from the user', () => {
+  const home = homeWithTwoSessions('no-tool-turn', 'mixed-source');
+  const payloadFor = (sessionId) => ({
+    session_id: sessionId,
+    cwd: 'F:\\fixture-project',
+    transcript_path: path.join(home, 'projects', 'F--fixture-project', `${sessionId}.jsonl`),
+  });
+
+  const real = runHook('stop-stats.mjs', payloadFor('no-tool-turn'), home);
+  assert.equal(real.status, 0, real.stderr);
+  assert.match(real.stdout, /tok\/s\(本轮\)/, 'a real session still reports its line');
+  const owned = readLatest(home);
+  assert.equal(owned.sessionId, 'no-tool-turn', "the user's own turn owns the overlay");
+
+  // The recap run: same cwd, handed a transcript_path that does not exist — the
+  // same shape as a real session whose first turn has not been written yet,
+  // which is why "is the field set" is the wrong test.
+  const background = runHook('stop-stats.mjs', payloadFor('mixed-source'), home);
+  assert.equal(background.status, 0, background.stderr);
+  assert.equal(background.stdout, '', 'a background turn must not report a line');
+  assert.deepEqual(readLatest(home), owned, 'latest.json must survive a background turn');
+  assert.equal(readJsonl(archived(home).history).length, 2, 'both turns still belong in history');
+});
+
+test('a keyless --current ignores a newer background entry', () => {
+  const home = homeWithTwoSessions('no-tool-turn', 'mixed-source');
+  // Neither entry carries realSession: the real session's transcript did not
+  // exist yet when its prompt arrived, which is true of every session's first
+  // turn. Believing that flag is what pinned this query to a recap run.
+  recordTurn({ key: 'real', sessionId: 'no-tool-turn', promptAt: 1000, cwd: 'F:\\fixture-project', realSession: false }, home);
+  recordTurn({ key: 'bg', sessionId: 'mixed-source', promptAt: 2000, cwd: 'F:\\fixture-project', realSession: false }, home);
+  assert.equal(selectCurrentTurn(readState(home), home).sessionId, 'no-tool-turn');
+
+  const out = runCli(['--current'], { QODER_HOME: home });
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stdout, `${formatTurnLine(computeStats({ home, sessionId: 'no-tool-turn' }))}\n`);
+
+  // An entry the hook did flag is trusted as it stands, even if its transcript
+  // has since been deleted.
+  recordTurn({ key: 'flagged', sessionId: 'gone-session', promptAt: 3000, cwd: 'F:\\fixture-project', realSession: true }, home);
+  assert.equal(selectCurrentTurn(readState(home), home).sessionId, 'gone-session');
 });
 
 section('state: per-turn keys and concurrency');
