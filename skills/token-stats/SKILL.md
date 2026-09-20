@@ -34,8 +34,12 @@ turn, including a turn that called no tools** — a plain text answer still has 
 output tokens. **If it prints nothing, show nothing** — do not fall back to an
 older turn, and never invent the numbers.
 
-If the CLI prints a `warning:` line to stderr, the turn was measured early and the
-number is short. Say so when you quote it rather than presenting it as complete.
+The early call cannot warn you about itself — the work it would be missing has not
+happened yet — so your own `--current` prints nothing extra. The flag is applied
+afterwards and lands in the archive's `warnings`, on the desktop strip, and on the
+stderr of a later `--session` query. Never in the chat line: that stays
+byte-identical to the archived one, so a reader of the chat alone cannot tell the
+number is short. If you suspect you measured early, check with `--session`.
 
 `--current` looks up the record the hook wrote for that key, so nothing has to
 guess which turn is live; without `--key` it falls back to the newest turn
@@ -137,15 +141,21 @@ latency there.
 
 ## Known failure modes
 
-- **The line is missing.** Check `errors.jsonl` in the plugin data directory
-  before assuming the model skipped the quote. `no-session-log` and
-  `unknown-log-format` are recorded there; the latter means Qoder renamed its
-  events and `runtime/schema.mjs` needs the new names.
-- **The number looks too small.** Look for a `warning` on the turn: it means the
-  model ran the measurement before finishing its answer.
-- **A turn is missing from `history.jsonl`.** Archiving is per-turn and
-  idempotent; a turn with no tokens and no segments is not archived, which is
-  correct for a turn that never reached the model.
+- **The line is missing.** Start with `errors.jsonl` in the plugin data directory:
+  `no-session-log` and `unknown-log-format` are recorded there, and the latter means
+  Qoder renamed its events so `runtime/schema.mjs` needs the new names. **But an
+  absent `errors.jsonl` proves nothing** — a hook that never ran cannot write it.
+  Two silent causes look identical from the chat: the hook failed to start (Qoder
+  logs `hook.finished` with `success: false`, e.g. `Plugin directory does not exist`
+  after a version swap), or the turn never reached `Stop` because it ended in an
+  error (Qoder logs `QueryEnd:error` where a clean turn logs `QueryEnd:end_turn`).
+  Filter on those events' fields; do not grep the message text, which self-matches
+  on this plugin's own prompt.
+- **The number looks too small.** The turn was flagged; see the note above on why
+  the flag is not in the chat line.
+- **A turn is missing from `history.jsonl`.** Archiving is per-turn and idempotent,
+  and a turn with no tokens and no segments is deliberately not archived. The two
+  silent causes under "the line is missing" drop a row the same way.
 
 ## Data locations
 

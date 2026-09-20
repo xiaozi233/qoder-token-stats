@@ -55,14 +55,15 @@
    `{"hook_name":"Stop","success":false,"exit_code":1,"error":"Plugin directory does not exist: C:\\Users\\…\\token-stats\\0.4.0 (token-stats@local — run /plugin to reinstall)"}`。
    如果用户还没重开，**先停下来让他重开**，不要在旧进程上做任何验收。
 
-1. 确认注册表指向 0.6.1：
+1. 确认注册表指向 `.qoder-plugin/plugin.json` 里声明的那个版本。**不要把版本号写死在这里**——
+   写死过一次，下次改版本这一步就会自相矛盾：
 
    ```bash
-   node -e "const r=require(process.env.USERPROFILE+'/.qoder-cn/plugins/installed_plugins_v2.json');console.log(JSON.stringify(r.plugins['token-stats@local'],null,1))"
+   node -e "const fs=require('fs'),p=require('path');const want=JSON.parse(fs.readFileSync('.qoder-plugin/plugin.json','utf8')).version;const r=JSON.parse(fs.readFileSync(process.env.USERPROFILE+'/.qoder-cn/plugins/installed_plugins_v2.json','utf8')).plugins['token-stats@local'][0];console.log('manifest='+want,' registry='+r.version);console.log('installPath='+r.installPath);console.log('match='+(want===r.version&&r.installPath.endsWith(p.sep+'token-stats'+p.sep+r.version)))"
    ```
 
-   期望 `version: "0.6.1"`、`installPath` 以 `...\cache\local\token-stats\0.6.1` 结尾。
-   若注册表还停在旧版本，说明 `node scripts/install.mjs` 还没跑过，或者跑完还没重开 Qoder。
+   期望 `match=true`。若注册表落后于 manifest，说明 `node scripts/install.mjs` 还没跑过、
+   或者跑完还没重开 Qoder。
 
 2. 跑测试，必须是 **33 passed, 0 failed**：
 
