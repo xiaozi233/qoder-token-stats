@@ -30,26 +30,37 @@ $PosFile = Join-Path $env:TEMP 'token-stats.overlay.pos'
 $StripW = 700
 $StripH = 34
 
+# A pid file is only a hint. Windows recycles pids, so a stale file can name a
+# perfectly healthy process that has nothing to do with the strip — and then
+# -Status claims "running" for a dead strip and the launch guard refuses to start
+# one, which leaves nothing on screen while every check says it is fine. Confirm
+# the pid is actually our powershell running this script.
+function Get-OverlayPid {
+    if (-not (Test-Path $PidFile)) { return $null }
+    $candidate = Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $candidate) { return $null }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$candidate" -ErrorAction SilentlyContinue
+    if (-not $proc) { return $null }
+    if ($proc.Name -ne 'powershell.exe' -or $proc.CommandLine -notlike '*overlay.ps1*') { return $null }
+    return [int]$candidate
+}
+
 if ($Status) {
-    if (Test-Path $PidFile) {
-        $old = (Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-        if ($old -and (Get-Process -Id $old -ErrorAction SilentlyContinue)) {
-            Write-Output "running (pid $old)"
-            exit 0
-        }
+    $running = Get-OverlayPid
+    if ($running) {
+        Write-Output "running (pid $running)"
+        exit 0
     }
     Write-Output 'not running'
     exit 0
 }
 
 if ($Stop) {
-    if (Test-Path $PidFile) {
-        $old = (Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-        if ($old -and (Get-Process -Id $old -ErrorAction SilentlyContinue)) {
-            Stop-Process -Id $old -Force
-            Write-Output "stopped pid $old"
-            exit 0
-        }
+    $running = Get-OverlayPid
+    if ($running) {
+        Stop-Process -Id $running -Force
+        Write-Output "stopped pid $running"
+        exit 0
     }
     Write-Output 'not running'
     exit 0
@@ -75,9 +86,9 @@ public class Win32 {
 [void][Win32]::SetProcessDPIAware()
 
 if (Test-Path $PidFile) {
-    $old = (Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-    if ($old -and (Get-Process -Id $old -ErrorAction SilentlyContinue)) {
-        Write-Output "already running (pid $old) - use -Stop first"
+    $existing = Get-OverlayPid
+    if ($existing) {
+        Write-Output "already running (pid $existing) - use -Stop first"
         exit 0
     }
 }
