@@ -6,8 +6,9 @@
 - 本轮 key：`05e4a1589603`
 - 执行者：**被测试的模型本人**（在 Qoder 内跑，非外部复现）
 
-结论速览：**环境闸门通过；第 1 轮通过**（引用行与归档行逐字节相同）。另有 5 处与文档/注释
-不符的地方，见第 3 节。
+结论速览：**环境闸门通过；第 1 轮、第 2 轮通过**（引用行与归档行逐字节相同）。第 3 轮的三方
+一致性**失败**，根因是 D2（`latest.json` 被后台子会话抢占，不是窗口分歧）；6 处与文档/注释不符
+的地方见第 4 节，其中 D1/D2/D3/D4/D5/D6 已修，见第 10 节。
 
 ---
 
@@ -127,6 +128,13 @@ transcript 尚未创建（本轮：prompt 于 15:03:02，transcript 文件 mtime
 **提示词自身的文本**（它被写进了会话日志）；本轮在我会话里命中 6 次，**全部是误报，真实失败 0 次**。
 必须按文档后半句加上 `hook.finished` + `plugin_id` 联合条件才可用。
 
+**D6 — 文档第 0 步举的版本号是错的。** 它说失败发生在 `...\token-stats\0.5.0`。按
+`hook.finished` 事件的字段筛（`success === false` 且 `error` 含该文本），全量日志里真实失败
+**5 次**，cache 版本分别是 **0.1.0 / 0.2.0 / 0.2.0 / 0.2.1 / 0.4.0**——没有一次是 0.5.0。
+时间跨度 `2026-09-20T00:26:52` → `13:49:13`，均为 `Stop` 钩子、`exit_code: 1`、`duration_ms: 0`。
+最后一次在 13:49，注册表 `lastUpdated` 为 14:48（本地），此后消失；我会话内 0 次。
+所以文档第 0 步的"先重启"要求是**有真实依据的**（同一失效模式反复发生过 5 次），只是例子版本号写错了。
+
 ## 5. 尚未闭环 / 无法验证
 
 | 项 | 状态 | 原因 |
@@ -227,3 +235,30 @@ line = ⚡ 200.5 tok/s(本轮) · 首字 4.8s · 输出 972 tok / 生成 4.8s ·
 **给用户的目视核对项：** 悬浮条此刻应显示
 `⚡ 200.5 tok/s(上一轮) · 首字 4.8s · 输出 972 tok / 生成 4.8s · ⏱ 15:23:17`（无告警后缀）。
 若确实如此，说明**渲染链路是忠实的**，错的是它读的那个文件。
+
+## 10. 修复（2026-09-20）
+
+改了 4 个运行时文件 + 2 份文档；测试 **27 → 32 passed, 0 failed**。
+每一处都做了**变异验证**：先把修复临时改回旧行为，确认对应测试确实失败，再改回。
+（不这么做就不知道新测试有没有牙齿。）
+
+| 问题 | 改法 | 变异验证 |
+|---|---|---|
+| D2 | `stop-stats.mjs` 改用「transcript 文件**是否真实存在**」代替「字段是否存在」；`archiveTurn` 新增 `writeLatest`，后台轮只追加 history，不写 `latest.json`/`latest.md` | `writeLatest: realSession` 改回 `true` → `a background sub-session does not take the overlay from the user` 失败 |
+| D3 | `stats.mjs` 新增 `measurable(turn)`，CLI 与 Stop **共用同一个判定**；无 tokens / 无段 / 无窗口内段时不打印也不归档，并记 `stop:nothing-measured` | `measurable` 改成 `Boolean(turn)` → 两条 nothing-measured 测试失败 |
+| D1 | `archive.mjs` 新增 `selectCurrentTurn`：无 `--key` 时在**读取时**重查 transcript 归属，不再相信提示时刻写的 `realSession` | 改回旧的 `state.promptAt` 逻辑 → `a keyless --current ignores a newer background entry` 失败 |
+| D4 | 删除 `~/.qoder-cn/plugins/data/token-stats-local/last-payload.json`（2758 B，全仓库无写入者） | — |
+| D5 | `docs/agent-prompt.md` 两处：给出按 `hook.finished` 字段筛的**已实测**命令，并写明不要搜那句错误文本本身 | 该命令实测输出 5 条真实失败 |
+| D6 | `docs/agent-prompt.md` 第 0 步：版本号例子改成真实的 0.1.0 / 0.2.0 / 0.2.1 / 0.4.0，并注明实测 5 次 | 同上 |
+| 注释 | `stats.mjs` 的 `quoteBoundary` 注释补上：边界实际取 `tool.shell.started`，这份"迟到 3.2 秒"正是承载答案的那一段得以留在窗口内的原因 | — |
+
+顺带：`findTranscript` 从 `stats.mjs` 上移到 `schema.mjs`（路径知识集中一处），删掉了重复的查找实现。
+
+**部署**：`node scripts/install.mjs`（不带 flag，未触碰环境变量），**同版本 0.6.0 原地覆盖**——
+故意不升版本号，因为升版本会删掉旧版本目录，正是 D6 那个失效模式的成因。
+已用**插件缓存里的副本**（不是仓库副本）复跑两态：真实会话打印并占据 `latest.json`；后台轮
+（`transcript_path` 给了但文件不存在）不打印、且 `latest.json` 逐字段不变；history 两行都在。
+
+**没改窗口规则本身。** 边界依赖一个 shell 派生事件的时间戳确实脆，但改它不会让任何测试变红、
+却会改变对外数字；按"不改变对外显示契约除非先说明理由并得到同意"的约定，留给你定夺。
+

@@ -39,11 +39,20 @@
 
 # 第一步：确认环境（不做这步，后面必然失败）
 
-0. **用户必须已经完全退出并重开 Qoder。** 上一任把插件从 0.5.0 升到 0.6.0 时删掉了
-   旧的版本目录；如果这个 Qoder 进程仍持着旧的内存路径，钩子会以
-   `Plugin directory does not exist: ...\token-stats\0.5.0` 失败。这个错误可以在
-   `~/.qoder-cn/logs/sessions/**/segments/*.jsonl` 里搜 `hook.finished` + `plugin_id`
-   查到（有先例：同样的错误在 0.1.0 时代出现过）。
+0. **用户必须已经完全退出并重开 Qoder。** 升级版本时会删掉旧的版本目录；如果这个 Qoder
+   进程仍持着旧的内存路径，钩子会以
+   `Plugin directory does not exist: ...\token-stats\<旧版本号>` 失败。这不是理论风险：
+   `~/.qoder-cn/logs/sessions/` 里实测到过 5 次，版本分别是 0.1.0 / 0.2.0 / 0.2.0 /
+   0.2.1 / 0.4.0，最后一次在 2026-09-20 13:49，装 0.6.0 之后消失。
+   **不要直接 grep 那句错误文本**：提示词里这句话会被写进会话日志，实测直接搜命中 6 条
+   全是自身回声、真实失败 0 条。要按 `hook.finished` 的字段筛：
+
+   ```bash
+   node -e "const fs=require('fs'),p=require('path'),R=p.join(process.env.USERPROFILE,'.qoder-cn','logs','sessions');let n=0;const w=d=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=p.join(d,e.name);if(e.isDirectory())w(f);else if(f.endsWith('.jsonl'))for(const l of fs.readFileSync(f,'utf8').split('\n')){if(!l.includes('hook.finished'))continue;let v;try{v=JSON.parse(l)}catch{continue}const x=v.data||{};if(x.hook_name&&x.success===false&&/Plugin directory does not exist/.test(String(x.error))){n++;console.log(v.ts,x.hook_name,String(x.error).slice(0,80))}}}};w(R);console.log('genuine failures =',n)"
+   ```
+
+   一次真实的失败长这样（`duration_ms: 0`、`exit_code: 1`、`plugin_id: "token-stats@local"`）：
+   `{"hook_name":"Stop","success":false,"exit_code":1,"error":"Plugin directory does not exist: C:\\Users\\…\\token-stats\\0.4.0 (token-stats@local — run /plugin to reinstall)"}`。
    如果用户还没重开，**先停下来让他重开**，不要在旧进程上做任何验收。
 
 1. 确认注册表指向 0.6.0：
@@ -243,8 +252,9 @@ node scripts/install.mjs --uninstall
 
 ## 使用说明（不在复制范围内）
 
-- **先重启 Qoder。** 上一任把插件升到了 0.6.0 并删掉了 0.5.0 目录；旧进程的钩子会以
-  `Plugin directory does not exist` 失败。这一步不做，后面全白跑。
+- **先重启 Qoder。** 升级会删掉旧的版本目录；旧进程的钩子会以
+  `Plugin directory does not exist: ...\token-stats\<旧版本号>` 失败（实测出现过 5 次，
+  0.1.0/0.2.0/0.2.1/0.4.0）。这一步不做，后面全白跑。查法见第一步第 0 条，别直接搜那句话本身。
 - 第一轮就把整块粘进去 —— 提示词里的「第 1 轮」要求它在这一轮就完成引用动作，晚粘会导致
   第一轮不在指令覆盖范围内。
 - 提示词刻意要求它**先报告、不要顺手改代码**。如果你希望它连修带验一次做完，把最后一段
