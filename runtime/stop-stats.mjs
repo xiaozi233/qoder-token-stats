@@ -16,8 +16,12 @@ import fs from 'node:fs';
 import process from 'node:process';
 import { appendError, archiveTurn, countSessionTurns, readGuard, readState, saveGuard } from './archive.mjs';
 import { computeStats, formatTurnLine, measurable } from './stats.mjs';
-import { qoderHome, rateLineDisabled } from './schema.mjs';
+import { qoderHome, rateLineDisabled, rememberRuntime } from './schema.mjs';
 import { FAIL_LIMIT, SILENT_TURNS, carriesLine, isQuoted, markWoken, settleWake, shouldWake, wakeReason } from './wake.mjs';
+
+// See prompt-submit.mjs: the wrapper that chose this interpreter reads the answer
+// back out of the data directory on the next turn.
+rememberRuntime();
 
 function readStdin() {
   return new Promise((resolve) => {

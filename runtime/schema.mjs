@@ -83,6 +83,32 @@ export function dataDir(home = qoderHome()) {
   return dir;
 }
 
+// `bin/token-stats.cmd` has to pick a JavaScript runtime before it can run any of
+// this, and its candidates are guesses about where Qoder is installed. Once a hook
+// is running the question is answered: Qoder launches it with
+// `ELECTRON_RUN_AS_NODE=1`, so `process.execPath` is a runtime known to work here.
+// Record it where the wrapper looks first, so a machine without a global `node.exe`
+// and without another plugin installed does not fail every hook silently.
+export function rememberRuntime(home = qoderHome()) {
+  try {
+    const file = path.join(dataDir(home), 'run', 'runtime-path.v1');
+    const value = process.execPath;
+    let current = null;
+    try {
+      current = fs.readFileSync(file, 'utf8').split('\n')[0].trim();
+    } catch {
+      /* nothing recorded yet */
+    }
+    if (current === value) return null;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${value}\n`, 'utf8');
+    return file;
+  } catch {
+    // A directory we cannot write costs the shortcut, not the turn.
+    return null;
+  }
+}
+
 // --- the format description -------------------------------------------------
 
 // Each logical event maps to the literal `type` values we accept, newest first.

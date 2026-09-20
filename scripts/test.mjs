@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { computeStats, formatTurnLine, estimateTokens, measurable } from '../runtime/stats.mjs';
-import { probe, sanitizeProject } from '../runtime/schema.mjs';
+import { probe, rememberRuntime, sanitizeProject } from '../runtime/schema.mjs';
 import {
   archiveTurn,
   readLatest,
@@ -739,6 +739,42 @@ test('an upgrade keeps the version a live session still points at', () => {
   assert.equal(after.includes('0.0.1'), false, 'older versions must be pruned');
   assert.equal(after.includes('0.0.2'), false, 'older versions must be pruned');
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('a hook records the interpreter that ran it', () => {
+  // bin/token-stats.cmd has to choose a JavaScript runtime before any of this can
+  // run, and until now its only reliable candidates were another plugin's file or a
+  // global node.exe. The hook that is already running knows the answer.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-runtime-'));
+  const file = path.join(home, 'plugins', 'data', 'token-stats-local', 'run', 'runtime-path.v1');
+  assert.equal(fs.existsSync(file), false, 'nothing recorded before the first hook');
+  assert.equal(rememberRuntime(home), file);
+  assert.equal(fs.readFileSync(file, 'utf8').trim(), process.execPath);
+  assert.equal(rememberRuntime(home), null, 'a matching record is not rewritten');
+  const when = fs.statSync(file).mtimeMs;
+  rememberRuntime(home);
+  assert.equal(fs.statSync(file).mtimeMs, when, 'and the disk is not touched again');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('the wrapper tries the recorded runtime before guessing', () => {
+  const cmd = fs.readFileSync(path.join(root, 'bin', 'token-stats.cmd'), 'utf8');
+  const order = [
+    '!data!\\run\\runtime-path.v1',
+    'token-stats-local\\run\\runtime-path.v1',
+    'qoder-context-qoderapp-bundler',
+  ].map((needle) => cmd.indexOf(needle));
+  assert.equal(order.every((i) => i >= 0), true, `missing a candidate: ${JSON.stringify(order)}`);
+  assert.deepEqual(
+    order,
+    [...order].sort((a, b) => a - b),
+    'our own record must be tried before another plugin',
+  );
+  // %~1 arrives quoted and may hold a path with spaces; unquoted, `if not exist`
+  // reads only its first word and reports the candidate file as missing.
+  assert.match(cmd, /if not exist "%~1"/);
+  assert.match(cmd, /set \/p candidate=<"%~1"/);
+  assert.ok(/\r\n/.test(cmd), 'cmd.exe needs CRLF line endings');
 });
 
 section('the overlay that reads the archive');

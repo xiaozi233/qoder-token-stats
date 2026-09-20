@@ -16,7 +16,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import process from 'node:process';
 import { appendError, recordTurn } from './archive.mjs';
-import { rateLineDisabled } from './schema.mjs';
+import { rateLineDisabled, rememberRuntime } from './schema.mjs';
+
+// Record the interpreter Qoder just used to run this hook, so the next turn's
+// `bin/token-stats.cmd` resolves on its first candidate. Done before anything can
+// bail out, because a turn with nothing to report still taught us something.
+rememberRuntime();
 
 function readStdin() {
   return new Promise((resolve) => {

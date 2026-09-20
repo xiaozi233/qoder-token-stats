@@ -24,7 +24,12 @@ if not defined data set "data=%CLAUDE_PLUGIN_DATA%"
 set "home=%QODER_HOME%"
 if not defined home set "home=%USERPROFILE%\.qoder-cn"
 
+rem The first two candidates are the file this plugin's own hooks write
+rem (runtime/schema.mjs:rememberRuntime), which is the only entry that works on a
+rem machine with no global node.exe and no other plugin installed. QODER_PLUGIN_DATA
+rem is exported to a hook subprocess only, hence the data-dir spelling as the second.
 if defined data call :try_path "!data!\run\runtime-path.v1"
+if not defined runtime call :try_path "!home!\plugins\data\token-stats-local\run\runtime-path.v1"
 if not defined runtime call :try_path "!home!\plugins\data\qoder-context-qoderapp-bundler\run\runtime-path.v1"
 if not defined runtime if exist "%LOCALAPPDATA%\Programs\Qoder CN\Qoder CN.exe" set "runtime=%LOCALAPPDATA%\Programs\Qoder CN\Qoder CN.exe"
 if not defined runtime if exist "D:\Qoder CN\Qoder CN.exe" set "runtime=D:\Qoder CN\Qoder CN.exe"
@@ -45,7 +50,9 @@ if "!run_as_node!"=="1" (set "ELECTRON_RUN_AS_NODE=1") else (set "ELECTRON_RUN_A
 exit /b !errorlevel!
 
 :try_path
-if not exist %~1 exit /b 0
-set /p candidate=<%~1
+rem %~1 arrives quoted and may contain spaces, so it has to be re-quoted here: a
+rem bare `if not exist %~1` reads the first word only and reports the file missing.
+if not exist "%~1" exit /b 0
+set /p candidate=<"%~1"
 if exist "!candidate!" set "runtime=!candidate!"
 exit /b 0

@@ -80,7 +80,7 @@ Qoder 还在运行时该脚本会拒绝执行——因为第二个实例只会�
 | --- | --- |
 | `.qoder-plugin/plugin.json` | 插件清单 |
 | `hooks/hooks.json` | 注册 `UserPromptSubmit` 和 `Stop` 两个钩子 |
-| `bin/token-stats.cmd` | Windows 包装脚本，先解析 JS 运行时再执行 `runtime/*.mjs` |
+| `bin/token-stats.cmd` | Windows 包装脚本：先挑一个 JS 运行时（优先读自己缓存的那份——钩子会把跑过它的解释器记下来），再执行 `runtime/*.mjs` |
 | `runtime/schema.mjs` | **所有借用自 Qoder 的名字集中在这一处**：事件类型、payload 字段、目录命名规则，以及检测格式变化的探测层 |
 | `runtime/stats.mjs` | 解析 Qoder 会话日志、计算各项指标（唯一的实现） |
 | `runtime/archive.mjs` | 插件自己的归档：原子写、咨询锁、`state.json`/`latest.json`/`history.jsonl`/`errors.jsonl` |

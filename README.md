@@ -122,7 +122,7 @@ hands off to the first and inherits nothing.
 | --- | --- |
 | `.qoder-plugin/plugin.json` | plugin manifest |
 | `hooks/hooks.json` | registers the `UserPromptSubmit` and `Stop` hooks |
-| `bin/token-stats.cmd` | Windows wrapper, resolves a JS runtime then runs `runtime/*.mjs` |
+| `bin/token-stats.cmd` | Windows wrapper: picks a JS runtime (its own cache first — a hook records the interpreter that ran it), then runs `runtime/*.mjs` |
 | `runtime/schema.mjs` | **every borrowed Qoder name in one place**: event types, payload fields, directory rules, and the probe that detects a format change |
 | `runtime/stats.mjs` | parses Qoder session logs, computes the metrics (the only implementation) |
 | `runtime/archive.mjs` | the plugin's own record: atomic writes, an advisory lock, `state.json`/`latest.json`/`history.jsonl`/`errors.jsonl` |
