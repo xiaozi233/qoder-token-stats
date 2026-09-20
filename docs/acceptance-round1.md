@@ -99,6 +99,20 @@ transcript 尚未创建（本轮：prompt 于 15:03:02，transcript 文件 mtime
 而 `~/.qoder-cn/projects/D--test-qoder-plugin/` 下只有 `7e473992…jsonl` 与 `9762dfc7…jsonl`
 两个 transcript——`4c79b15a` 没有 transcript。
 
+**实测复现（2026-09-20 15:17，非推断）：** `history.jsonl` 出现一条不属于我会话的行：
+
+```
+2026-09-20T07:17:45.859Z | 0648fa82 | ⚡ 127.2 tok/s(本轮) · 首字 6.3s · 输出 797 tok / 生成 6.3s · ⏱ 15:17:45 | warn= []
+```
+
+`0648fa82-d2aa-45e1-ba4f-f34db5727876` 有 segment 日志，但**没有 transcript**（该目录下只有
+`7e473992…` 与 `9762dfc7…` 两个 `.jsonl`），即后台子会话。它进了 history 就证明
+`archiveTurn` 执行到了写入阶段；而 `archive.mjs:219`（history）→ `:229`（latestMd）→ `:230-233`
+（latestJson）是**同一个函数里顺序执行的**，若后两次写失败会抛错并被 `stop-stats.mjs:79-83` 记进
+`errors.jsonl`——该文件不存在。因此 `latest.json` 确实被这条 797 tok 的行覆盖，
+持续约 27 秒（15:17:45 → 15:18:12 我这一轮 Stop 才覆盖回来）。
+悬浮条若在运行，这段时间显示的就是后台 recap 子会话的数字。
+
 **D3 — 0 token 的轮：归档有行、聊天无行。**
 `runtime/token-stats.mjs:85` 在 `!turn.tokens` 时静默 `exit 0`；`runtime/stop-stats.mjs:62-68` 只挡
 `!turn`，随后照样归档。所以 0-token 轮会进 `history.jsonl`，却永远不会出现在聊天里。
@@ -122,7 +136,8 @@ transcript 尚未创建（本轮：prompt 于 15:03:02，transcript 文件 mtime
 | 第 3 轮 告警真的会出现 | 未验证 | `history.jsonl` 共 44 行，`warnings` 非空者 **0 行**；该路径在真实数据上从未被触发过 |
 | 第 4 轮（`--session` 累计行） | 部分 | 已在历史会话上验证 `~` 纪律，见第 6 节 |
 | 第 5 轮 另一侧（关掉开关能看到 `~`） | 无法验证 | 需重启 Qoder 进程，会终止本会话；按指示未动环境 |
-| D2 的"`4c79b15a` 是后台子会话" | **推断，非已证** | 决定性验证需要抓一次 Stop payload 的 `session_id`/`transcript_path` |
+| D2 的"后台子会话覆盖 `latest.json`" | **已证**（另一等价现场，见 4.D2） | `0648fa82` 无 transcript 却有 history 行，且 `errors.jsonl` 不存在 |
+| D2 的"`4c79b15a`（14:56 那行）是后台子会话" | **推断，非已证** | 决定性验证需要抓一次 Stop payload 的 `session_id`/`transcript_path` |
 
 ## 6. 顺带完成的其他轮次证据
 
@@ -142,3 +157,36 @@ transcript 尚未创建（本轮：prompt 于 15:03:02，transcript 文件 mtime
 - 残留仅 `.bak`（文档承诺保留）与两个空目录
 - 沙箱内打印 `skipped QODERCN_EXPOSE_TOKEN_USAGE: this run targets …\ts-verify`
 - 真实 `HKCU\Environment` 仍为 `1`；真实注册表里 `token-stats@local` 仍在
+
+## 7. 第 2 轮判定：通过（无工具轮）
+
+用户问了一个纯文字问题（"用一句话解释 tok/s 是什么"），该轮除末尾的统计命令外**没有调用任何工具**。
+按 `tool.requested` 事件逐个统计该轮（`turnId = fd06eb7f-bc8b-4915-ba84-9ac67b1219d6`）：
+
+```
+events in turn = 28 | tool.requested = 1
+  tool call #1  ts=2026-09-20T15:17:55.557+08:00  node "…token-stats.mjs" …
+tool names = ["Bash"]
+assistant segments = 2 | response.completed = 2
+```
+
+- 工具调用清单**恰好 1 条**，就是统计命令本身——"除统计命令外为空"成立。
+- 引用行 `⚡ 135 tok/s(本轮) · 首字 4.0s · 输出 546 tok / 生成 4s · ⏱ 15:18:10`
+  与归档行**逐字节相同**：均 59 字符，sha256 前 16 位 `4308a24ded75ef18`。
+- `window = {promptMs: 1789888671413, boundaryMs: 1789888690301, source: "quote", segmentsTotal: 2}`
+  —— 2 段中只计 1 段，被排除的是"只写引用块"的那一段。
+
+## 8. 第 4 轮核对
+
+`--session 7e473992…` 文本行（无 `~`，与开关打开一致）：
+
+```
+会话累计 172.9 tok/s · 48401 tok / 280s · 31 段 / 峰 236.7 · 4 轮
+token 来源: 服务端上报（真实值）
+```
+
+`--json` 逐轮：4 轮全部 `reported`，`estimatedTurns = 0`，每轮 `warnings = []`，
+`tokenSource === "reported"` 时 `tokens > 0` 全部成立。`errors.jsonl` 不存在。
+
+补充观察：`--session` 的"本轮"行在使用期间是**正在进行的这一轮**（`source: "end"`），
+所以它的数字会随着工具调用增长——上表 4439 tok / 3 段即本轮中途的快照，不是终值。
