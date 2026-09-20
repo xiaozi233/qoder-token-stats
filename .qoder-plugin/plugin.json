@@ -1,6 +1,6 @@
 {
   "name": "token-stats",
   "displayName": "Qoder Token Stats",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Show per-turn token throughput (tok/s, first-token latency, output tokens, segments, peak) after every reply"
 }

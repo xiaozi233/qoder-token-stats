@@ -42,6 +42,13 @@ node scripts/install.mjs --expose-token-usage   # 注册插件 + 让 Qoder 输�
 
 同时 `token-stats` skill 会注册进来，可以直接问 agent「本轮多少 tok/s」。
 
+聊天里那行是模型自己打出来的，偶尔会漏。想要一个完全不依赖模型的显示，开桌面悬浮条——
+它读的就是同一份归档结果：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\overlay.ps1   # 或双击 dashboard\overlay.cmd
+```
+
 ## 安装 / 卸载
 
 ```bash
@@ -79,6 +86,8 @@ Qoder 还在运行时该脚本会拒绝执行——因为第二个实例只会�
 | `runtime/stop-stats.mjs` | `Stop` 钩子：归档本轮统计行 |
 | `runtime/token-stats.mjs` | CLI（`--current --key <k>` 给模型收尾用，`--session` 查历史） |
 | `skills/token-stats/SKILL.md` | 教会 agent 怎么跑、怎么解释这些数字 |
+| `dashboard/overlay.ps1` | 可选的桌面置顶悬浮条（完全不经过模型） |
+| `dashboard/overlay.cmd` | 上面那个脚本的双击入口 |
 | `scripts/install.mjs` | 写入用户插件注册表（改前留 `.bak` 备份） |
 
 ## 改了代码不想重装
@@ -151,6 +160,26 @@ Stop          → 把同一行归档到 history.jsonl / latest.md
 
 关闭注入：在 `~/.qoder-cn/token-stats.config.json` 写入 `{ "tokenRateLine": false }`。
 
+## 桌面悬浮条（可选）
+
+上面那行引用终究还是要模型自己去打——它一般会打，但偶尔不打。`dashboard/overlay.ps1`
+把模型从链路里彻底拿掉：它每秒读一次 `latest.json`（`Stop` 钩子每轮都会重写），
+把里面的 `line` 画到一条透明、置顶的悬浮条上。不用配置，也不用提示。
+
+```powershell
+# 启动（或直接双击 dashboard\overlay.cmd）
+powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\overlay.ps1
+powershell -NoProfile -File dashboard\overlay.ps1 -Status   # 在不在跑？
+powershell -NoProfile -File dashboard\overlay.ps1 -Stop     # 关掉
+```
+
+按住可以直接拖到任意位置，位置会被记住；右键有关闭菜单。首次启动它会贴在 Qoder
+窗口右下角，并且通过采样那个窗口的边缘亮度在深/浅两套配色间自动切换，两种主题下都看得清。
+它默认找 `Qoder CN` 这个进程名，可用 `-ProcessName` 改；插件数据目录不在默认位置时用 `-DataDir` 指。
+
+条上写的是 `(上一轮)` 而不是 `(本轮)`：归档是在一轮**结束**时才写的，所以回答正在往外吐的
+时候，条上显示的还是上一轮那一行。
+
 ## 实测数据
 
 在作者机器上的真实会话跑出来的结果，包含两个历史 Bedrock mod 会话：
@@ -163,8 +192,9 @@ Stop          → 把同一行归档到 history.jsonl / latest.md
 
 ## 已知限制
 
-- **统计行依赖模型配合。** 那是一串注入指令，不是渲染出来的控件——模型忽略它，这一行就不出现。
-  Qoder 插件只能提供 hooks、MCP server 和 skill，没有 UI 扩展点，插件内部无法绘制常驻控件。
+- **聊天里那行统计依赖模型配合。** 那是一串注入指令，不是渲染出来的控件——模型忽略它，这一行就不出现。
+  Qoder 插件只能提供 hooks、MCP server 和 skill，没有 UI 扩展点，插件内部无法往聊天面板里画常驻控件。
+  绕开办法就是 `dashboard/overlay.ps1`：一条桌面悬浮条，直接读归档好的那一行。
 - **token 总量目前是估算值，但原因是 Qoder 主动隐藏，不是网关没给。** 客户端源码实证：
 
   ```js

@@ -47,6 +47,14 @@ plugin registry is reconciled at the same time. The line appears after every rep
 The `token-stats` skill is registered too, so you can just ask the agent
 "本轮多少 tok/s".
 
+The chat line is rendered by the model, so it can occasionally be skipped. For a
+display that never depends on the model, start the desktop strip — it reads the
+same archived line:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\overlay.ps1   # or double-click dashboard\overlay.cmd
+```
+
 ## Install
 
 ```bash
@@ -88,6 +96,8 @@ hands off to the first and inherits nothing.
 | `runtime/stop-stats.mjs` | `Stop` hook: archives the finished turn's line |
 | `runtime/token-stats.mjs` | CLI (`--current --key <k>` for the model, `--session` for history) |
 | `skills/token-stats/SKILL.md` | teaches the agent to run and explain the numbers |
+| `dashboard/overlay.ps1` | optional always-on-top desktop strip (no model involved) |
+| `dashboard/overlay.cmd` | double-click wrapper for `overlay.ps1` |
 | `scripts/install.mjs` | writes the user plugin registry (with `.bak` backups) |
 
 ## Iterating without reinstalling
@@ -173,6 +183,30 @@ The `Stop` hook is still the durable record: it reads `session_id`,
 `transcript_path` and `parent_business_info.begin_at` from its payload to pin down
 the finished turn, and writes `history.jsonl`, `latest.md` and `latest.json`.
 
+## Desktop overlay strip (optional)
+
+The quoted line above still depends on the model obeying the instruction — it
+usually does, and sometimes does not. `dashboard/overlay.ps1` removes the model
+from the loop: it reads `latest.json`, which the `Stop` hook rewrites after every
+turn, and paints it on a transparent always-on-top strip. Nothing to configure,
+nothing to prompt.
+
+```powershell
+# start (or double-click dashboard\overlay.cmd)
+powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\overlay.ps1
+powershell -NoProfile -File dashboard\overlay.ps1 -Status   # is it running?
+powershell -NoProfile -File dashboard\overlay.ps1 -Stop     # close it
+```
+
+Drag the strip anywhere; the position is remembered. Right-click for a close menu.
+It docks next to the bottom-right of the Qoder window on first launch and switches
+between a dark and light palette by sampling that window's edge, so it stays
+readable in both themes. `Qoder CN` is the process name it looks for — override
+with `-ProcessName`, and `-DataDir` if the plugin data lives elsewhere.
+
+The label reads `(上一轮)` rather than `(本轮)`: the archive is written when a turn
+*ends*, so while an answer is streaming the strip shows the turn before it.
+
 ## Hook output
 
 `stop-stats.mjs` writes plain text to stdout and archives unconditionally. Disable
@@ -195,15 +229,18 @@ Bedrock-modding sessions:
 
 ## Known limits
 
-- **The line depends on the model cooperating.** It is an injected instruction,
-  not a rendered widget — a model that ignores it shows nothing. Qoder plugins
-  expose hooks, MCP servers and skills only, with no UI extension point, so there
-  is no way to paint a persistent bar from inside the plugin.
-- **Token totals are estimates.** The gateway reports `output_tokens = 0` and
-  `~/.qoder-cn` keeps no usage database (unlike ZCode's `model_usage` table, which
-  stores real `output_tokens`, `reasoning_tokens` and `time_to_first_token_ms` per
-  request). Estimates drift for code-heavy turns, where tokenizers cost punctuation
-  and indentation differently than the word-count heuristic used here.
+- **The in-chat line depends on the model cooperating.** It is an injected
+  instruction, not a rendered widget — a model that ignores it shows nothing. Qoder
+  plugins expose hooks, MCP servers and skills only, with no UI extension point, so
+  nothing inside the plugin can paint into the chat panel. `dashboard/overlay.ps1`
+  is the workaround: a desktop strip fed straight from the archived line.
+- **Token totals are estimates unless `QODERCN_EXPOSE_TOKEN_USAGE=1` reaches the
+  process.** With the flag off the client zeroes every usage field before writing
+  the log, and `~/.qoder-cn` keeps no usage database (unlike ZCode's `model_usage`
+  table, which stores real `output_tokens`, `reasoning_tokens` and
+  `time_to_first_token_ms` per request). Estimates drift for code-heavy turns,
+  where tokenizers cost punctuation and indentation differently than the
+  word-count heuristic used here.
 - **`首字` is an upper bound.** Qoder logs no first-token event.
 
 ## License

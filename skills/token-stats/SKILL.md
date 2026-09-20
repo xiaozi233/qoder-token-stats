@@ -36,6 +36,23 @@ its own timestamp prints nothing, so a previous turn can never be presented as t
 current one — and the first turn of a session now gets a line too, which it did
 not before per-turn keys.
 
+## The desktop strip (no model involved)
+
+`dashboard/overlay.ps1` renders the archived line on an always-on-top strip, so the
+numbers stay visible even in a turn where the model skipped the quote. It polls
+`latest.json`, which the `Stop` hook rewrites at the end of every turn.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "${QODER_PLUGIN_ROOT}/dashboard/overlay.ps1"
+powershell -NoProfile -File "${QODER_PLUGIN_ROOT}/dashboard/overlay.ps1" -Status
+powershell -NoProfile -File "${QODER_PLUGIN_ROOT}/dashboard/overlay.ps1" -Stop
+```
+
+Run `-Status` before starting one, or it will just report `already running` and
+exit. The strip shows the *finished* turn, labelled `(上一轮)`. When the user asks
+why the chat line is missing, offer this as the reliable alternative rather than
+retrying the quote.
+
 ## Querying history
 
 ```bash
