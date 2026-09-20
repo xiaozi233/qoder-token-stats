@@ -78,3 +78,22 @@ export function wakeReason(line) {
     line,
   ].join('\n');
 }
+
+// Probe: does Qoder render a Stop hook's `systemMessage`? The SDK turns one into a
+// `hook_system_message` message part for *any* event (`output.systemMessage &&
+// !suppressOutput`), unlike stdout, which only reaches the model for
+// SessionStart/UserPromptSubmit. A part type is not yet a rendered row, though —
+// upstream zcode-tps-monitor shows its line exactly this way, and if Qoder's
+// renderer draws it too then the model wake below is pure cost: an extra iteration
+// per turn, plus the risk of a number copied wrong.
+//
+// Tagged, because an untagged line rendered by the client and the same line pasted
+// by the model are indistinguishable from the chat alone. If the tag shows up, keep
+// `systemMessage`, delete the wake and the tag together.
+export const SYSTEM_MESSAGE_PROBE = true;
+
+export function wakePayload(line) {
+  const out = { decision: 'deny', reason: wakeReason(line) };
+  if (SYSTEM_MESSAGE_PROBE) out.systemMessage = `〔探针〕${line}`;
+  return out;
+}

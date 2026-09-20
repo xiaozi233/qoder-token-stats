@@ -17,7 +17,7 @@ import process from 'node:process';
 import { appendError, archiveTurn, countSessionTurns, readGuard, readState, saveGuard } from './archive.mjs';
 import { computeStats, formatTurnLine, measurable } from './stats.mjs';
 import { qoderHome, rateLineDisabled, rememberRuntime } from './schema.mjs';
-import { FAIL_LIMIT, SILENT_TURNS, carriesLine, isQuoted, markWoken, settleWake, shouldWake, wakeReason } from './wake.mjs';
+import { FAIL_LIMIT, SILENT_TURNS, carriesLine, isQuoted, markWoken, settleWake, shouldWake, wakePayload } from './wake.mjs';
 
 // See prompt-submit.mjs: the wrapper that chose this interpreter reads the answer
 // back out of the data directory on the next turn.
@@ -137,5 +137,5 @@ const turnIndex = countSessionTurns(readState(), payload.session_id);
 if (!shouldWake(guard, turnIndex)) process.exit(0);
 
 saveGuard(payload.session_id, markWoken(guard, turnIndex, line));
-process.stdout.write(JSON.stringify({ decision: 'deny', reason: wakeReason(line) }));
+process.stdout.write(JSON.stringify(wakePayload(line)));
 process.exit(0);

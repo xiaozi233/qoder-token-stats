@@ -33,6 +33,7 @@ import {
   isQuoted,
   settleWake,
   shouldWake,
+  SYSTEM_MESSAGE_PROBE,
 } from '../runtime/wake.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -431,6 +432,12 @@ test('a finished real turn is handed back as a blocking Stop', () => {
   assert.equal(json.decision, 'deny', 'deny is what makes Qoder feed the reason back');
   const line = formatTurnLine(computeStats({ home, sessionId: id }));
   assert.ok(json.reason.includes(line), 'the reason carries the archived line verbatim');
+  // The probe: does Qoder render a hook's own `systemMessage`? Both channels are
+  // answered at once while that is unknown, and the tag is what tells the two
+  // renderings apart in the chat.
+  assert.ok(SYSTEM_MESSAGE_PROBE);
+  assert.equal(json.systemMessage, `〔探针〕${line}`);
+  assert.equal(json.suppressOutput, undefined, 'suppressOutput would drop the systemMessage');
   assert.deepEqual(readGuard(id, home).pending.line, line, 'the wake is on record');
 });
 
