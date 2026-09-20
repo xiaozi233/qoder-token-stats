@@ -18,11 +18,22 @@ import {
   readLatest,
   readState,
   recordTurn,
+  readGuard,
+  saveGuard,
   selectCurrentTurn,
   selectTurn,
   withLock,
   readJsonl,
 } from '../runtime/archive.mjs';
+import {
+  FAIL_LIMIT,
+  SILENT_TURNS,
+  blankGuard,
+  carriesLine,
+  isQuoted,
+  settleWake,
+  shouldWake,
+} from '../runtime/wake.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -395,6 +406,95 @@ test('an early measurement reaches the archive with its warning attached', () =>
   assert.ok(latest.warnings.length > 0, 'the early-call warning must reach latest.json');
   assert.match(latest.warnings[0], /漏掉/);
   assert.match(fs.readFileSync(path.join(archived(home).dir, 'latest.md'), 'utf8'), /- ⚠ /);
+});
+
+section('the Stop hook hands the finished line back to the model');
+
+// A Stop hook's stdout only reaches the model for SessionStart and
+// UserPromptSubmit — Qoder keeps a two-event whitelist for it. `decision: "deny"`
+// is the one remaining channel into the same turn, so that is what the visible
+// line now travels on, and these tests pin the shape of it.
+function stopPayload(home, id) {
+  return {
+    session_id: id,
+    cwd: 'F:\\fixture-project',
+    transcript_path: path.join(home, 'projects', 'F--fixture-project', `${id}.jsonl`),
+  };
+}
+
+test('a finished real turn is handed back as a blocking Stop', () => {
+  const home = homeFor('no-tool-turn', { transcript: true });
+  const id = sessionIdOf('no-tool-turn');
+  const out = runHook('stop-stats.mjs', stopPayload(home, id), home);
+  assert.equal(out.status, 0, out.stderr);
+  const json = JSON.parse(out.stdout);
+  assert.equal(json.decision, 'deny', 'deny is what makes Qoder feed the reason back');
+  const line = formatTurnLine(computeStats({ home, sessionId: id }));
+  assert.ok(json.reason.includes(line), 'the reason carries the archived line verbatim');
+  assert.deepEqual(readGuard(id, home).pending.line, line, 'the wake is on record');
+});
+
+test('the Stop that follows a wake settles it instead of waking again', () => {
+  const home = homeFor('no-tool-turn', { transcript: true });
+  const id = sessionIdOf('no-tool-turn');
+  const line = formatTurnLine(computeStats({ home, sessionId: id }));
+  runHook('stop-stats.mjs', stopPayload(home, id), home);
+
+  const quoted = { ...stopPayload(home, id), stop_hook_active: true, last_assistant_message: `> ${line}` };
+  const again = runHook('stop-stats.mjs', quoted, home);
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(again.stdout, '', 'a wake must never chain into a second wake');
+  assert.equal(readGuard(id, home).fails, 0, 'a pasted line clears the failure tally');
+  assert.equal(readGuard(id, home).pending, null);
+});
+
+test('a line is recognised even reflowed or missing its clock', () => {
+  const line = '⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 ~3,389 tok / 生成 60.6s · 45 段 / 峰 84.6 · ⏱ 18:04:13';
+  assert.ok(isQuoted(`> ${line}`, line));
+  assert.ok(isQuoted(line.replace(/ · ⏱ .*$/, ''), line), 'the clock suffix is not part of the promise');
+  assert.ok(isQuoted('>  ⚡ 55.9  tok/s(本轮)', line) === false, 'a truncated line is not a quote');
+  assert.ok(!isQuoted('', line) && !isQuoted('some text', ''), 'nothing to match is not a match');
+});
+
+test(`${FAIL_LIMIT} ignored wakes buy the session ${SILENT_TURNS} silent turns`, () => {
+  let guard = { ...blankGuard(), turns: FAIL_LIMIT };
+  for (let i = 0; i < FAIL_LIMIT; i += 1) guard = settleWake(guard, false).guard;
+  assert.equal(guard.fails, FAIL_LIMIT);
+  assert.ok(!shouldWake(guard, guard.silentUntil), 'still silent on the last silent turn');
+  assert.ok(shouldWake(guard, guard.silentUntil + 1), 'one probe is allowed after the window');
+  assert.ok(!shouldWake({ ...blankGuard(), pending: { line: 'x', at: Date.now() } }, 5), 'an unsettled wake blocks');
+  assert.ok(shouldWake({ ...blankGuard(), pending: { line: 'x', at: 0 } }, 5), 'a stale pending wake does not');
+  assert.equal(settleWake(guard, true).guard.fails, 0, 'a pasted line ends the streak');
+});
+
+test('a silent guard gives the iteration back', () => {
+  const home = homeFor('no-tool-turn', { transcript: true });
+  const id = sessionIdOf('no-tool-turn');
+  saveGuard(id, { ...blankGuard(), turns: 9, fails: FAIL_LIMIT, silentUntil: 9 }, home);
+  assert.equal(runHook('stop-stats.mjs', stopPayload(home, id), home).stdout, '');
+  saveGuard(id, { ...blankGuard(), turns: 9, fails: FAIL_LIMIT, silentUntil: -1 }, home);
+  assert.equal(JSON.parse(runHook('stop-stats.mjs', stopPayload(home, id), home).stdout).decision, 'deny');
+});
+
+test('a turn that already quoted a number is not woken', () => {
+  const home = homeFor('no-tool-turn', { transcript: true });
+  const id = sessionIdOf('no-tool-turn');
+  const early = '⚡ 12.1 tok/s(本轮) · 首字 3.0s · 输出 ~120 tok / 生成 9.9s · ⏱ 10:00:00';
+  const out = runHook('stop-stats.mjs', { ...stopPayload(home, id), last_assistant_message: `> ${early}` }, home);
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stdout, '', 'waking anyway would put a second line under the first');
+  assert.equal(readGuard(id, home), null, 'and no wake is recorded');
+  assert.ok(carriesLine(early) && !carriesLine('本轮 45 tok/s 是估算的'), 'the shape test needs no exact match');
+});
+
+test('tokenRateLine:false silences both the prompt and the wake', () => {
+  const home = homeFor('no-tool-turn', { transcript: true });
+  const id = sessionIdOf('no-tool-turn');
+  fs.writeFileSync(path.join(home, 'token-stats.config.json'), JSON.stringify({ tokenRateLine: false }), 'utf8');
+  const prompt = runHook('prompt-submit.mjs', { session_id: id, cwd: 'F:\\fixture-project' }, home);
+  assert.equal(JSON.parse(prompt.stdout).hookSpecificOutput.additionalContext, '');
+  assert.equal(runHook('stop-stats.mjs', stopPayload(home, id), home).stdout, '', 'no wake either');
+  assert.ok(readLatest(home), 'the archive the overlay reads is untouched');
 });
 
 section('state: per-turn keys and concurrency');

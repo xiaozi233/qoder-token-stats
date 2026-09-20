@@ -1,29 +1,22 @@
-// UserPromptSubmit hook: record when this turn started, then tell the model to
-// measure it and quote the result.
+// UserPromptSubmit hook: record when this turn started, and tell the model that
+// the statistics line will arrive at the end of the turn.
 //
-// Qoder never renders a hook's stdout, so the visible statistics line is
-// produced by the model itself: it runs the CLI at the end of its answer and
-// pastes the output. Each turn gets its own key — the hook mints one, records
-// the turn's start time under it, and puts the key in the command it hands
-// over — so the model reads back its own turn and can never be shown a
-// previous one's numbers.
+// Qoder never renders a hook's stdout, so the visible line has to come from the
+// model. The model cannot compute it, though: the number only exists once the
+// answer is finished, and a command run mid-answer both misses the tail of the
+// turn and has to pass Auto mode's classifier — which rejects an unrequested
+// script every turn until the session's denial circuit breaker trips. So the
+// Stop hook measures the finished turn and wakes the model to paste it; this
+// hook introduces that line and stops the model from improvising one.
 //
-// The instruction asks for the command as the *last* action, after the summary.
-// That is not cosmetic: the metrics stop at the CLI call (so the CLI and the
-// Stop hook agree exactly), which means everything written after it is not
-// counted. Called before the summary, that excluded tail was 32% of the turn
-// on average; called after it, only the short quote itself is excluded.
+// The turn key is still minted and recorded: it is how `--current` finds *this*
+// turn when a reader asks for the numbers by hand.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
-import { appendError, archivePaths, recordTurn } from './archive.mjs';
-import { qoderHome } from './schema.mjs';
-
-const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
-const cli = path.join(runtimeDir, 'token-stats.mjs');
+import { appendError, recordTurn } from './archive.mjs';
+import { rateLineDisabled } from './schema.mjs';
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -42,26 +35,15 @@ function readStdin() {
   });
 }
 
-function configDisabled() {
-  try {
-    const { dir } = archivePaths();
-    const config = JSON.parse(fs.readFileSync(path.join(qoderHome(), 'token-stats.config.json'), 'utf8'));
-    void dir;
-    return config.tokenRateLine === false;
-  } catch {
-    return false;
-  }
-}
-
 const turnKey = crypto.randomBytes(6).toString('hex');
 
 const INSTRUCTION = [
   '',
-  '【本轮统计指令】本次回答的**最后一个动作**：先把所有总结文字写完，然后运行下面这条命令一次——',
-  `node "${cli}" --current --key ${turnKey}`,
-  '它会输出一行本轮的 token 速率统计。把该行原样放进 Markdown 引用块（新行行首加「> 」）贴在回复最末尾，这就是你本轮的最后输出；不要改写数字，不要追加别的说明。',
-  '为什么必须是最后一个动作：统计在命令被调用的那一刻截断，之后再写的内容不计入。先写总结再运行，数字才完整。',
-  '注意：①本轮即使没有调用任何工具也要运行并显示——纯文字回答同样有真实的输出 token；②若命令没有任何输出，就不要显示统计行；③绝不要凭记忆或估算自行编造这行数字。',
+  '【本轮统计】本轮的 token 速率统计由系统在本轮结束后算好，再作为一条 Stop 钩子反馈交给你，形如：',
+  '⚡ 55.9 tok/s(本轮) · 首字 4.8s · 输出 ~3,389 tok / 生成 60.6s · 45 段 / 峰 84.6',
+  '收到后把那一行原样放进 Markdown 引用块（新行行首加「> 」）贴在回复最末尾；一个数字都不要改写，也不要附加别的说明。',
+  '本轮之内不要自己运行任何统计命令：统计要覆盖你写的全部正文，而命令只能在你回答中途执行，那样算出来的数字必然偏小。正常作答即可。',
+  '注意：①若系统本轮没有把统计行交给你，就不要显示统计行；②绝不要凭记忆或估算自行编造这行数字。',
 ].join('\n');
 
 function emit(additionalContext) {
@@ -79,7 +61,7 @@ try {
   payload = {};
 }
 
-if (!configDisabled()) {
+if (!rateLineDisabled()) {
   try {
     recordTurn({
       key: turnKey,

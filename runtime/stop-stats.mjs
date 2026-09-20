@@ -1,19 +1,23 @@
 // Stop hook: the turn has just finished, so its events are all on disk.
-// Archives the per-turn throughput line for the dashboard/overlay and reports it
-// on stdout. Qoder forwards Stop stdout as an SDK `hook_response` rather than
-// rendering it, so the visible copy is produced by the model's own quote — this
-// hook is the durable record, and it computes the *same* window the CLI does
-// (both stop at the model's end-of-answer `--current` call), so the archived
-// line and the quoted line are always the same number.
+//
+// Two jobs. It archives the per-turn throughput line for the dashboard/overlay,
+// and it hands that line back to the model so the user actually sees it. The
+// second is why this hook answers `decision: "deny"`: a Stop hook's stdout is not
+// rendered, and Qoder only forwards stdout to the model for SessionStart and
+// UserPromptSubmit — but a *blocking* Stop feeds its reason back as a continuation
+// message, which is the one channel that lands in the same turn. It also means
+// the number is measured at the end of the answer rather than where the model
+// happened to squeeze a command in.
 //
 // Every outcome is recorded. "This turn had nothing to measure" and "the log
 // could not be read" are different things and no longer share a silent exit 0.
 
 import fs from 'node:fs';
 import process from 'node:process';
-import { appendError, archiveTurn } from './archive.mjs';
+import { appendError, archiveTurn, countSessionTurns, readGuard, readState, saveGuard } from './archive.mjs';
 import { computeStats, formatTurnLine, measurable } from './stats.mjs';
-import { qoderHome } from './schema.mjs';
+import { qoderHome, rateLineDisabled } from './schema.mjs';
+import { FAIL_LIMIT, SILENT_TURNS, carriesLine, isQuoted, markWoken, settleWake, shouldWake, wakeReason } from './wake.mjs';
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -40,8 +44,25 @@ try {
   payload = {};
 }
 
-// Re-entrancy guard: while a Stop hook is being handled the client may stop again.
-if (payload.stop_hook_active) process.exit(0);
+// Re-entrancy guard: this is the Stop that follows our own wake. Never wake twice
+// for one turn — settle the previous wake instead, which is how a model that
+// ignored the instruction stops costing an iteration every turn.
+if (payload.stop_hook_active) {
+  const settled = payload.session_id && readGuard(payload.session_id);
+  if (settled && settled.pending) {
+    const quoted = isQuoted(payload.last_assistant_message, settled.pending.line);
+    const { guard, enteredSilence } = settleWake(settled, quoted);
+    saveGuard(payload.session_id, guard);
+    if (enteredSilence) {
+      appendError(
+        'stop:wake-suppressed',
+        `${FAIL_LIMIT} 次唤醒都没有换来统计行，静默 ${SILENT_TURNS} 轮（桌面条仍显示数字）`,
+        { sessionId: payload.session_id },
+      );
+    }
+  }
+  process.exit(0);
+}
 if (!payload.session_id) {
   appendError('stop:no-session-id', 'Stop payload carried no session_id');
   process.exit(0);
@@ -98,7 +119,19 @@ try {
   process.exit(1);
 }
 
-if (!realSession) process.exit(0);
+if (!realSession || rateLineDisabled()) process.exit(0);
 
-process.stdout.write(`${line}\n`);
+// A turn that already quoted a number needs no wake, and waking it anyway would
+// put a second line under the first — the mid-answer one measuring less of the turn.
+if (carriesLine(payload.last_assistant_message)) process.exit(0);
+
+// The line exists and nobody in this turn has said it out loud, so ask for it.
+// `shouldWake` is what keeps this from becoming a per-turn tax on a session where
+// the model never pastes: three misses and the hook goes quiet for a stretch.
+const guard = readGuard(payload.session_id);
+const turnIndex = countSessionTurns(readState(), payload.session_id);
+if (!shouldWake(guard, turnIndex)) process.exit(0);
+
+saveGuard(payload.session_id, markWoken(guard, turnIndex, line));
+process.stdout.write(JSON.stringify({ decision: 'deny', reason: wakeReason(line) }));
 process.exit(0);

@@ -84,10 +84,11 @@ Qoder 还在运行时该脚本会拒绝执行——因为第二个实例只会�
 | `runtime/schema.mjs` | **所有借用自 Qoder 的名字集中在这一处**：事件类型、payload 字段、目录命名规则，以及检测格式变化的探测层 |
 | `runtime/stats.mjs` | 解析 Qoder 会话日志、计算各项指标（唯一的实现） |
 | `runtime/archive.mjs` | 插件自己的归档：原子写、咨询锁、`state.json`/`latest.json`/`history.jsonl`/`errors.jsonl` |
-| `runtime/prompt-submit.mjs` | `UserPromptSubmit` 钩子：给本轮打时间戳，并注入显示指令 |
-| `runtime/stop-stats.mjs` | `Stop` 钩子：归档本轮统计行 |
-| `runtime/token-stats.mjs` | CLI（`--current --key <k>` 给模型收尾用，`--session` 查历史） |
-| `scripts/test.mjs` | `node scripts/test.mjs` —— 25 个测试，零依赖 |
+| `runtime/prompt-submit.mjs` | `UserPromptSubmit` 钩子：给本轮打时间戳，并注入关于这一行的预告 |
+| `runtime/stop-stats.mjs` | `Stop` 钩子：归档本轮统计行，然后唤醒模型把它贴出来 |
+| `runtime/wake.mjs` | 唤醒的决策，纯函数：引用检测、失败计数、静默窗口 |
+| `runtime/token-stats.mjs` | CLI（`--current --key <k>` 手动查，`--session` 查历史） |
+| `scripts/test.mjs` | `node scripts/test.mjs` —— 41 个测试，零依赖 |
 | `scripts/make-fixtures.mjs` | 从真实的 `~/.qoder-cn` 重新生成 `tests/fixtures/` |
 | `skills/token-stats/SKILL.md` | 教会 agent 怎么跑、怎么解释这些数字 |
 | `docs/agent-prompt.md` | 交接提示词：让 Qoder 里的 agent 接手本仓库，含只有在 Qoder 内部才能跑的验收步骤 |
@@ -108,16 +109,16 @@ node scripts/test.mjs
 
 ## 那行数字从哪来、排除了什么
 
-统计从 Qoder 自己的事件日志里量出来，**量到模型运行 `--current` 命令的那一刻为止**——
-注入的指令要求把这条命令放在最后，也就是总结写完、正文打完之后。所以这一行描述的是
-整轮减去「引用它自己的那句话」。
+统计从 Qoder 自己的事件日志里量出来，**量到本轮结束为止**：`Stop` 钩子等回答写完才取数，
+所以这一行描述的是整段回答，减去事后被贴出来的那句引用。
 
-这个边界很要紧。早先的版本要求**先**运行命令再写总结，于是把总结本身悄悄排除掉了：
-在作者的日志上那是**平均 32% 的一轮**，30 轮实测里 30 轮都和归档数字对不上。现在聊天行
-和归档行由同一个函数、同一个边界算出来，两者完全一致。
+这个边界很要紧。上一版设计是让模型在回答当中跑一条 `--current` 命令，而其中更早的变体要求
+**先**运行命令再写总结，于是把总结本身悄悄排除掉了：在作者的日志上那是**平均 32% 的一轮**，
+30 轮实测里 30 轮都和归档数字对不上。手动运行的 `--current` 照旧停在被调用的那一刻，调用早
+了也会告警；而聊天行与归档行由同一个函数、同一份记录算出来，两者完全一致。
 
-如果模型还是提前运行了命令（回答没写完就跑了），这一轮会被**标记**而不是当成完整轮汇报。
-**标记不可能来自那次提前调用本身**——它跳过的工作当时还没发生，没有可比的量；标记是事后算的，
+如果 `--current` 真的在回答写完之前就被调用过，这一轮会被**标记**而不是当成完整轮汇报。
+**标记不可能来自那次调用本身**——它跳过的工作当时还没发生，没有可比的量；标记是事后算的，
 出现在归档的 `warnings`、`latest.md`、悬浮条（追加 `⚠ 数字偏小（统计早于回答结束）` 并把整行显示成
 琥珀色），以及 `--session` 查询的 stderr 上。引用到聊天里的那一行与归档行**逐字节相同**，
 所以只看聊天的人**看不出这个数偏小**。
@@ -179,34 +180,46 @@ Qoder 会把结构化事件追加到 `~/.qoder-cn/logs/sessions/<项目>/<会话
 
 ## 统计行是怎么显示出来的
 
-Qoder 插件没有 UI 扩展点。客户端只认 `hook_started` / `hook_progress` / `hook_response`
-三种钩子事件，画出来的 part 只有 `{id, event, status, exitCode, startedAt, completedAt}`——
-**没有文字字段**——所以钩子往 stdout 写什么都进不了聊天面板（已在 Qoder CN 0.3.4 的
-`app.asar` 里核实）。那行可见的文字因此是**让模型自己打出来的**：
+Qoder 插件没有 UI 扩展点。客户端的钩子渲染器只认 `hook_started` / `hook_progress` /
+`hook_response` 三种事件，画出来的 part 只有 `{id, event, status, exitCode, startedAt,
+completedAt}`——**没有文字字段**——所以钩子往 stdout 写什么都进不了聊天面板（已在 Qoder
+CN 0.3.4 的 `app.asar` 里核实）。钩子的 stdout 同样不会转给模型：运行时为此维护的白名单
+只有两个事件，`new Set(["SessionStart","UserPromptSubmit"])`。`Stop` 钩子还剩一条能回到
+本轮的通道——以 `{"decision":"deny","reason":…}` 应答，Qoder 会把这条 reason 当作续写消息
+重新注入——这一行就搭这条通道进来：
 
 ```
 UserPromptSubmit ──为本轮生成 key，写入 state.json──┐
-                                                     └─additionalContext：
-                                「先写完总结，然后运行 token-stats --current
-                                  --key <本轮 key>，把它作为最后一个动作，
-                                  把输出原样引用到回复末尾」
-模型做完工具 → 写完总结 → 运行 CLI → 用引用块贴出这一行
-Stop          → 把同一行归档到 history.jsonl / latest.md
+                                                  └─additionalContext：
+                          「统计行会在本轮结束时作为一条 Stop 钩子反馈交给你，
+                            把它原样放进引用块；若本轮没有统计行就不要显示，
+                            绝不凭记忆或估算编造数字」
+模型作答 → Stop → 量数、归档，并把这一行作为 reason 以 deny 返回
+模型贴出这一行 → Stop（stop_hook_active）→ 结算这次唤醒，不再出声
 ```
 
-每轮一个 12 位十六进制 key，模型读回的是自己那条记录，不再和别的会话抢同一个槽位。
-之前正是这个抢槽位让**会话的第一轮永远不显示**：那一轮 transcript 还没落盘，旧的
-「这是不是真实会话」探测判定失败，指令根本没注入。不带 key 的 `--current` 仍然可用——
-它回落到「最近一次拥有 transcript 的会话」记录的轮次。两种情况下，只要本轮还没有属于自己的
-model 请求，就一律不输出，绝不会把上一轮的数字当本轮显示。
+在 `Stop` 上量数也比旧设计更准：数字覆盖的是完整回答，而不是模型恰好挤出一次命令时已经
+写完的那部分。
 
-这套设计直接来自 [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor)——
-它面对的是同一个「钩子画不了 UI」的问题，用的是同一个解法。
+那条命令是上一版设计——钩子让模型把 `token-stats --current --key <key>` 作为最后一个动作
+跑掉，思路取自 [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor)，它面对的
+是同一个「钩子画不了 UI」的问题，用的是同一个解法。它撑不过 **Auto 模式**：每轮那次被强制
+安排的工具调用都要过分类器，先被判为与用户的请求无关而拒绝，再被判为工作区之外的脚本而
+拒绝。计数按会话累计，阈值写着 `{maxConsecutive: 3, maxTotal: 20}`；`recordAllow()` 只为
+真正走到分类器的那次调用清掉连续计数，所以中间被放行的无关调用并不会把它归零，而一旦触发，
+两个计数又同时被重置——于是每轮一次的强制命令不是失败一次，而是循环失败，agent 看起来一直
+卡在原地。**用户**主动开口要的数字照样能出，因为相关性那道闸读的是用户请求，范围那道闸不读。
 
-`Stop` 钩子仍是可靠的归档来源。它算的是**和 CLI 完全相同的窗口**——两者都停在模型自己那次
-`--current` 调用上，而这个边界是从日志里查出来的、不是互相传递的——所以归档的那行和引用的
-那行永远是同一个数。归档按轮幂等；后台子会话（没有 transcript）会记进历史，但绝不覆盖
-`latest.json`。
+`--current` 因此留给这类手动查询。每轮一个 12 位十六进制 key，模型读回的是自己那条记录，
+不会和别的会话抢同一个槽位；不带 key 的 `--current` 仍然可用，它回落到最近一次拥有
+transcript 的会话所记录的那一轮。两种情况下，只要本轮的 model 请求全部早于本轮自己的
+时间戳，就一律不输出，绝不会把上一轮的数字当本轮显示。
+
+`Stop` 钩子同时是可靠的归档来源：它按轮幂等地写 `history.jsonl` 和 `latest.json`，后台
+子会话（没有 transcript）会记进历史，但绝不覆盖 `latest.json`。一次唤醒连着三轮被模型
+忽略，该会话就换来八轮安静（`errors.jsonl` 里的 `stop:wake-suppressed`），因为每轮多一次
+模型迭代是实打实的成本；`~/.qoder-cn/token-stats.config.json` 里写
+`{"tokenRateLine": false}` 会把注入和唤醒一起关掉。
 
 ## 出问题了看哪
 
@@ -225,8 +238,8 @@ $ token-stats --session <id>
 token-stats: unrecognised model event type(s): llm.request.begin, llm.response.done — Qoder's log format has changed
 ```
 
-只想关掉注入指令、保留归档：在 `~/.qoder-cn/token-stats.config.json` 写入
-`{ "tokenRateLine": false }`。
+只想关掉聊天里那一行、保留归档：在 `~/.qoder-cn/token-stats.config.json` 写入
+`{ "tokenRateLine": false }`，注入和唤醒会一起停掉。
 
 ## 桌面悬浮条（可选）
 
@@ -247,7 +260,7 @@ powershell -NoProfile -File dashboard\overlay.ps1 -Stop     # 关掉
 `$env:QODER_PLUGIN_DATA` → `$env:QODER_HOME\plugins\data\token-stats-local` →
 `~/.qoder-cn/...` 的顺序取默认值，也可用 `-DataDir` 指。
 
-归档行带警告时（模型在总结之前就量了数），悬浮条会追加琥珀色的
+归档行带警告时（那一轮里有过一次过早的 `--current` 调用），悬浮条会追加琥珀色的
 `⚠ 数字偏小（统计早于回答结束）`，而不是把偏小的数字当成完整值显示。
 
 条上写的是 `(上一轮)` 而不是 `(本轮)`：归档是在一轮**结束**时才写的，所以回答正在往外吐的
@@ -280,11 +293,13 @@ set TOKEN_STATS_SOURCE=<本仓库的绝对路径>                  # 或直接�
 
 ## 已知限制
 
-- **聊天里那行统计依赖模型配合。** 那是一串注入指令，不是渲染出来的控件——模型忽略它，这一行就不出现。
-  作者日志上的实测：指令覆盖到的轮次里 80% 真的跑了 CLI，57% 的回答里出现了那段引用块。
-  绕开办法就是 `dashboard/overlay.ps1`：一条桌面悬浮条，直接读归档好的那一行。
-- **这一行排除了模型在命令之后写的内容。** 指令要求把命令放最后，于是只有那句引用被排除——
-  在作者日志上约占一轮的 7%。模型提前运行会被标记，但数字仍然偏小。
+- **聊天里那行统计依赖模型配合。** 那是一串注入指令加一次唤醒，不是渲染出来的控件——模型
+  不理这次唤醒，这一行就不出现（连续三轮不理，该会话静默八轮）。旧设计时代的实测：指令覆盖到
+  的轮次里 80% 真的跑了 CLI，57% 的回答里出现了那段引用块。绕开办法就是
+  `dashboard/overlay.ps1`：一条桌面悬浮条，直接读归档好的那一行。
+- **这一行不含事后被贴出来的那句引用。** 统计在本轮结束时量完，模型只是把算好的行原样贴出，
+  被排除的只剩那句引用——在作者日志上约占一轮的 7%。手动运行的 `--current` 仍然停在被调用的
+  那一刻，调用过早会被标记，但数字仍然偏小。
 - **token 总量目前是估算值，但原因是 Qoder 主动隐藏，不是网关没给。** 客户端源码实证：
 
   ```js

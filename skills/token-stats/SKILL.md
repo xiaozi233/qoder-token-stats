@@ -15,37 +15,70 @@ its status bar:
 
 ## Showing the line at the end of an answer
 
-The `UserPromptSubmit` hook injects an instruction telling you to do this. Follow
-it exactly: **write your whole summary first, then run this as your last action** —
+The number cannot exist before the answer is finished — it measures the whole
+answer — so **you never run a command to get it**. At `Stop` the hook measures the
+finished turn, archives it, and answers with
+`{"decision":"deny","reason":"…<the line>…}`; Qoder feeds that reason back to you as
+a continuation message. When it arrives, paste the line verbatim inside a Markdown
+blockquote (`> ` at the start of a new line) as the last thing in the turn and add
+nothing else. One wake per turn: the Stop that follows carries `stop_hook_active`
+and stays quiet.
 
-```bash
-node "${QODER_PLUGIN_ROOT}/runtime/token-stats.mjs" --current --key <key>
+The `UserPromptSubmit` hook only introduces this, so you know what the feedback is
+for. **If no line arrives, show nothing** — do not fall back to an older turn, and
+never invent the numbers.
+
+A wake costs one extra model iteration, so it is opt-out-able: write
+`{"tokenRateLine": false}` to `~/.qoder-cn/token-stats.config.json`. The desktop strip
+and `--session` keep working; only the chat line goes away.
+
+### Why the line is not a command you run
+
+Until 0.6.x the hook told you to run `node … --current --key <key>` as your last
+action. That command has to clear Auto mode's classifier, and it cannot: a statistics
+script does not serve the user's request, and the script lives outside the workspace.
+Measured in the SDK (`ist()`): the guard tallies `consecutiveDenials` and
+`totalDenials` per session and trips at **3 consecutive or 20 total**, and it only
+clears the consecutive count for calls that actually reached the classifier — so the
+unrelated tool calls that succeed between denials do not reset it, and tripping
+resets both counters. A forced per-turn command therefore does not fail once, it
+cycles forever and the session stops trusting the agent.
+
+Evidence: those three deny texts, and a 3rd-denial breaker hit that survived two
+turn boundaries *and* successful unrelated tool calls in between, were read out of
+the transcript of session `c332b7a4` — a real Auto-mode session. Reading the tally
+out of the SDK is inference from shipped code, not an Auto-mode experiment; the
+wake path this replaced it with has never been exercised under Auto mode either.
+
+A *user-requested* query still works (the relevance gate is about the user's request;
+the scope gate is not). For those, an allow rule is the fix — `:*` is a prefix rule,
+so a per-turn `--key` is covered. Qoder's own one-click suggestion for this command
+was the broad `node:*`; the narrow form below is preferable but has not been verified
+against Windows quoting, so try it in a throwaway Auto session first:
+
+```jsonc
+// <project>/.qoder/settings.local.json
+{
+  "permissions": {
+    "allow": ["Bash(node \"D:/test/qoder-plugin/runtime/token-stats.mjs\" --current:*)"]
+  }
+}
 ```
 
-Order matters, and not cosmetically. The metrics stop at the moment this command
-runs, so anything you write afterwards is not counted. Run it before your summary
-and the summary is excluded — measured at **32% of the turn on average** across
-30 real turns. Run it last and only the short quote itself is excluded (~7%).
-
-Use the command exactly as the hook injected it — the `--key` is minted per turn
-and identifies *your* turn. Paste whatever it prints, verbatim, inside a Markdown
-blockquote at the very end of your reply, with nothing after it. Run it **every
-turn, including a turn that called no tools** — a plain text answer still has real
-output tokens. **If it prints nothing, show nothing** — do not fall back to an
-older turn, and never invent the numbers.
-
-The early call cannot warn you about itself — the work it would be missing has not
-happened yet — so your own `--current` prints nothing extra. The flag is applied
-afterwards and lands in the archive's `warnings`, on the desktop strip, and on the
-stderr of a later `--session` query. Never in the chat line: that stays
-byte-identical to the archived one, so a reader of the chat alone cannot tell the
-number is short. If you suspect you measured early, check with `--session`.
+### Measuring by hand
 
 `--current` looks up the record the hook wrote for that key, so nothing has to
 guess which turn is live; without `--key` it falls back to the newest turn
 recorded by a transcript-owning session. A turn whose model requests all predate
 its own timestamp prints nothing, so a previous turn can never be presented as the
 current one.
+
+Everything after a manual `--current` call is excluded from that number, so a
+command run before the summary reports less than the turn: measured at **32% of the
+turn on average** across 30 real turns. The flag is applied afterwards and lands in
+the archive's `warnings`, on the desktop strip, and on the stderr of a later
+`--session` query — never in the chat line, which stays byte-identical to the
+archived one. If you suspect you measured early, check with `--session`.
 
 ### If the command fails
 
@@ -143,7 +176,9 @@ latency there.
 
 - **The line is missing.** Start with `errors.jsonl` in the plugin data directory:
   `no-session-log` and `unknown-log-format` are recorded there, and the latter means
-  Qoder renamed its events so `runtime/schema.mjs` needs the new names. **But an
+  Qoder renamed its events so `runtime/schema.mjs` needs the new names. `stop:wake-suppressed`
+  means the model ignored three wakes in a row and the hook went quiet for
+  `SILENT_TURNS` turns — the strip still has the number. **But an
   absent `errors.jsonl` proves nothing** — a hook that never ran cannot write it.
   Two silent causes look identical from the chat: the hook failed to start (Qoder
   logs `hook.finished` with `success: false`, e.g. `Plugin directory does not exist`

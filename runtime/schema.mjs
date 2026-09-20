@@ -21,6 +21,19 @@ export function qoderHome() {
   return env('QODER_HOME') || path.join(os.homedir(), '.qoder-cn');
 }
 
+// `"tokenRateLine": false` in token-stats.config.json switches the per-turn line
+// off for both halves of the plugin — the prompt injection and the Stop wake.
+// Waking the model costs it an extra iteration, so a reader who only wants the
+// overlay or the history query must be able to buy that back.
+export function rateLineDisabled(home = qoderHome()) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(home, 'token-stats.config.json'), 'utf8'));
+    return config.tokenRateLine === false;
+  } catch {
+    return false;
+  }
+}
+
 // Qoder names a project directory after its absolute path with every character
 // that is not [A-Za-z0-9-] replaced by a dash — separators, dots and spaces
 // alike, and dashes already in the path survive as themselves. Verified against

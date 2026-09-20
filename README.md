@@ -57,16 +57,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\overlay.ps1   # or
 
 ## Where the number comes from, and what it excludes
 
-The line is measured from Qoder's own event log, and the measurement **ends at
-the moment the model ran the `--current` command** — the instruction asks for
-that command as the very last action, after the summary is written. So the line
-describes all of the turn except the short sentence that quotes it.
+The line is measured from Qoder's own event log, and the measurement runs to the
+end of the turn: the `Stop` hook takes it once the answer is finished, so the
+number covers the whole answer and leaves out only the short line pasted after it.
 
-That boundary matters. An earlier version asked for the command *before* the
-summary, which silently excluded the summary itself: on the author's logs that
-was **32% of the turn on average**, and 30 of 30 measured turns disagreed with
-the archived figure. Now the chat line and the archived line are computed by the
-same function from the same boundary, so they agree exactly.
+That boundary matters. The previous design had the model run a `--current` command
+inside the answer, and a variant that asked for it *before* the summary silently
+excluded the summary itself: on the author's logs that was **32% of the turn on
+average**, and 30 of 30 measured turns disagreed with the archived figure. A
+hand-run `--current` still stops at the moment it is called and warns when it was
+called early; the chat line and the archived line are computed by the same function
+from the same record, so they agree exactly.
 
 If the model runs the command early anyway — before finishing its answer — the
 turn is **flagged** rather than reported as if complete. The early call itself
@@ -125,10 +126,11 @@ hands off to the first and inherits nothing.
 | `runtime/schema.mjs` | **every borrowed Qoder name in one place**: event types, payload fields, directory rules, and the probe that detects a format change |
 | `runtime/stats.mjs` | parses Qoder session logs, computes the metrics (the only implementation) |
 | `runtime/archive.mjs` | the plugin's own record: atomic writes, an advisory lock, `state.json`/`latest.json`/`history.jsonl`/`errors.jsonl` |
-| `runtime/prompt-submit.mjs` | `UserPromptSubmit` hook: timestamps the turn and injects the display instruction |
-| `runtime/stop-stats.mjs` | `Stop` hook: archives the finished turn's line |
-| `runtime/token-stats.mjs` | CLI (`--current --key <k>` for the model, `--session` for history) |
-| `scripts/test.mjs` | `node scripts/test.mjs` — 25 tests, no dependencies |
+| `runtime/prompt-submit.mjs` | `UserPromptSubmit` hook: timestamps the turn and injects the heads-up about the line |
+| `runtime/stop-stats.mjs` | `Stop` hook: archives the finished turn's line, then wakes the model to quote it |
+| `runtime/wake.mjs` | the wake decision, pure: quote detection, failure tally, silence window |
+| `runtime/token-stats.mjs` | CLI (`--current --key <k>` by hand, `--session` for history) |
+| `scripts/test.mjs` | `node scripts/test.mjs` — 41 tests, no dependencies |
 | `scripts/make-fixtures.mjs` | regenerates `tests/fixtures/` from a real `~/.qoder-cn` |
 | `skills/token-stats/SKILL.md` | teaches the agent to run and explain the numbers |
 | `docs/agent-prompt.md` | handoff prompt for running an agent on this repo inside Qoder — includes the verification steps that cannot run outside Qoder |
@@ -207,32 +209,51 @@ Qoder plugins have no UI extension point. The client's hook renderer only accept
 `hook_started` / `hook_progress` / `hook_response` and draws a part carrying
 `{id, event, status, exitCode, startedAt, completedAt}` — **no text field** — so a
 hook cannot paint anything into the chat, no matter what it writes to stdout
-(confirmed in `app.asar` for Qoder CN 0.3.4). The visible line is therefore
-produced by the model:
+(confirmed in `app.asar` for Qoder CN 0.3.4). Nor is a hook's stdout forwarded to
+the model: the runtime keeps a two-event whitelist for that,
+`new Set(["SessionStart","UserPromptSubmit"])`. A `Stop` hook has one remaining
+channel into the visible turn — answer with `{"decision":"deny","reason":…}`, which
+Qoder re-injects as a continuation message — and that is what the line rides on:
 
 ```
 UserPromptSubmit ──mints a per-turn key, writes state.json──┐
                                                             └─additionalContext:
-                          "write your summary first, then run
-                           token-stats --current --key <that key>
-                           as your last action and quote the output"
-Model finishes tools → writes the summary → runs the CLI → pastes the line in a blockquote
-Stop                 → archives the same line to history.jsonl / latest.md
+                          "the line arrives at the end of the turn
+                           as a Stop hook feedback; paste it in a
+                           blockquote, never invent it"
+Model answers → Stop → measure, archive, deny with the line as the reason
+Model pastes the line → Stop (stop_hook_active) → settles the wake, stays quiet
 ```
 
-Every turn gets its own 12-hex key, so a model reads back its own record instead of
-racing for one shared slot. A keyless `--current` still works — it falls back to
-the newest turn recorded by a transcript-owning session. Either way a turn whose
-model requests all predate its own timestamp prints nothing, so a previous turn
-can never be presented as the current one.
-This design is taken from [zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor),
-which solves the same "hooks cannot paint UI" problem the same way.
+Measuring at `Stop` is also more accurate than the old design: the number now covers
+the whole answer instead of whatever had been written when the model happened to fit
+a command in.
 
-The `Stop` hook is the durable record. It computes the **same** window the CLI
-does — both stop at the model's own `--current` call, found in the log rather than
-handed over — so the archived line and the quoted line are always the same
-number. Archiving is idempotent per turn, and a background sub-session (which
-owns no transcript) is written to history but never overwrites `latest.json`.
+The command was the previous design — the hook told the model to run
+`token-stats --current --key <key>` as its last action, taken from
+[zcode-tps-monitor](https://github.com/shy3130/zcode-tps-monitor), which solves the
+same "hooks cannot paint UI" problem that way. It cannot survive **Auto mode**: every
+turn's forced tool call goes through the classifier, which denied it as unrelated to
+the user's request and then as a script outside the workspace. The tally is per
+session and reads `{maxConsecutive: 3, maxTotal: 20}`; `recordAllow()` clears the
+consecutive count only for calls that reached the classifier, so the unrelated calls
+that succeed in between do not reset it, and tripping resets both counters — so a
+forced per-turn command does not fail once, it cycles forever while the agent keeps
+looking stuck. Anything the *user* asks for still works, because the relevance gate
+reads the request; the scope gate does not.
+
+`--current` remains available for those hand-run queries. Every turn gets its own
+12-hex key, so a model reads back its own record instead of racing for one shared
+slot, and a turn whose model requests all predate its own timestamp prints nothing —
+a previous turn can never be presented as the current one.
+
+The `Stop` hook is also the durable record: it archives `history.jsonl` and
+`latest.json` idempotently per turn, and a background sub-session (which owns no
+transcript) is written to history but never overwrites `latest.json`. A wake the
+model ignores three times in a row buys the session eight turns of silence
+(`stop:wake-suppressed` in `errors.jsonl`), because one extra model iteration per
+turn is a real cost; `{"tokenRateLine": false}` in `~/.qoder-cn/token-stats.config.json`
+turns both the injection and the wake off.
 
 ## Desktop overlay strip (optional)
 

@@ -207,6 +207,42 @@ export function selectCurrentTurn(state, home = qoderHome()) {
   return Number.isFinite(state.promptAt) ? state : null;
 }
 
+// --- wake guard -------------------------------------------------------------
+
+// One entry per session, read by the Stop hook to decide whether to wake the
+// model for this turn's line and written back after it reports.
+
+export function readGuard(sessionId, home = qoderHome()) {
+  const guards = readJson(archivePaths(home).state, null)?.guards;
+  return guards && guards[sessionId] ? guards[sessionId] : null;
+}
+
+export function saveGuard(sessionId, guard, home = qoderHome()) {
+  const { dir, state } = archivePaths(home);
+  return withLock(dir, 'state', () => {
+    const current = readJson(state, null) || {};
+    const previous = current.guards && typeof current.guards === 'object' ? current.guards : {};
+    const next = {};
+    // A session id per entry, so a long-lived install would otherwise grow state.json
+    // by one object for every conversation ever had.
+    for (const id of Object.keys(previous).slice(-15)) {
+      if (id !== sessionId) next[id] = previous[id];
+    }
+    next[sessionId] = guard;
+    current.guards = next;
+    writeFileAtomic(state, JSON.stringify(current));
+    return guard;
+  });
+}
+
+// Which turn of this session is being finished. Derived from the prompt records
+// rather than a counter of its own, so a Stop hook that died mid-turn cannot
+// desynchronise it.
+export function countSessionTurns(state, sessionId) {
+  const turns = state && Array.isArray(state.turns) ? state.turns : [];
+  return turns.filter((t) => t && t.sessionId === sessionId).length;
+}
+
 // --- archive ----------------------------------------------------------------
 
 function turnKey(entry) {

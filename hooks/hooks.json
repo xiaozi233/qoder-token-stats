@@ -1,5 +1,5 @@
 {
-  "description": "token-stats: measure the turn at Stop, and instruct the model to quote it",
+  "description": "token-stats: measure the turn at Stop, then wake the model to quote it",
   "hooks": {
     "UserPromptSubmit": [
       {
