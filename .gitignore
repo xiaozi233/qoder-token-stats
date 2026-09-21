@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .DS_Store
+
+# Agent working state, not part of the plugin.
+.workbuddy/
