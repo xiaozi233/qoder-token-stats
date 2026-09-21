@@ -154,16 +154,31 @@ fs.writeFileSync(path.join(installPath, 'SOURCE'), `${source}\n`, 'utf8');
 // on every following UserPromptSubmit, until the client is restarted. So prune
 // everything but the newest two, which covers the session mid-flight during an
 // upgrade, and never remove `installPath` itself.
+//
+// "Newest" has to mean newest by *version*. Ordering these directories by mtime
+// is how the pinned one got deleted on 2026-09-21: two versions shared a
+// timestamp, the sort put 0.6.3 over 0.7.6, and the session that was live at the
+// time lost every hook until the client restarted. A cache directory's mtime
+// says when a version was last written here, not which version it is.
 try {
   const versionsRoot = path.dirname(installPath);
   const live = path.resolve(installPath);
-  const kept = fs
+  const byVersion = (a, b) => {
+    const left = a.split('.').map((n) => Number.parseInt(n, 10) || 0);
+    const right = b.split('.').map((n) => Number.parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+      const diff = (right[i] || 0) - (left[i] || 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  };
+  const present = fs
     .readdirSync(versionsRoot, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => ({ name: e.name, at: fs.statSync(path.join(versionsRoot, e.name)).mtimeMs }))
-    .sort((a, b) => b.at - a.at);
-  for (const stale of kept.slice(2)) {
-    const dir = path.join(versionsRoot, stale.name);
+    .filter((e) => e.isDirectory() && /^\d+(\.\d+)*$/.test(e.name))
+    .map((e) => e.name)
+    .sort(byVersion);
+  for (const name of present.slice(2)) {
+    const dir = path.join(versionsRoot, name);
     if (path.resolve(dir) === live) continue;
     fs.rmSync(dir, { recursive: true, force: true });
   }

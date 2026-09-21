@@ -753,6 +753,44 @@ test('a QODER_HOME-sandboxed install never touches the real environment', () => 
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('the versions that survive are chosen by version, not by mtime', () => {
+  // The test above passes whether the prune sorts by version or by mtime, because
+  // it makes the two agree. On 2026-09-21 they did not: the cache held 0.6.3 and
+  // 0.7.6 with the same timestamp, the sort put 0.6.3 first, and installing 0.8.0
+  // deleted 0.7.6 — the directory the live session was pinned to, which kills every
+  // hook in that session until the client restarts. Here the newest mtime belongs
+  // to the *oldest* version, so only a version-ordered prune keeps 0.0.2.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-prune-order-'));
+  const install = path.join(root, 'scripts', 'install.mjs');
+  const runInstaller = () =>
+    spawnSync(process.execPath, [install], { encoding: 'utf8', env: { ...process.env, QODER_HOME: home } });
+
+  assert.equal(runInstaller().status, 0);
+  const versionsRoot = path.join(home, 'plugins', 'cache', 'local', 'token-stats');
+  const live = fs.readdirSync(versionsRoot)[0];
+
+  const day = 86400000;
+  // 0.0.1 gets the freshest mtime, 0.0.2 the stalest: an mtime-ordered prune keeps
+  // 0.0.1 and drops 0.0.2.
+  for (const [name, age] of [['0.0.1', 0], ['0.0.2', 5]]) {
+    const dir = path.join(versionsRoot, name);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'marker'), name);
+    const when = new Date(Date.now() - age * day);
+    fs.utimesSync(dir, when, when);
+  }
+
+  assert.equal(runInstaller().status, 0);
+  const after = fs.readdirSync(versionsRoot).sort();
+  assert.ok(after.includes(live), 'the version just installed must survive');
+  assert.ok(
+    after.includes('0.0.2'),
+    `the version directly below the installed one must survive whatever its mtime: got ${after.join(', ')}`,
+  );
+  assert.equal(after.includes('0.0.1'), false, 'two versions back is pruned');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('an upgrade keeps the version a live session still points at', () => {
   // Qoder pins `${QODER_PLUGIN_ROOT}` per session, so removing the directory an
   // upgrade replaced does not merely cost that session a turn: Stop and every
