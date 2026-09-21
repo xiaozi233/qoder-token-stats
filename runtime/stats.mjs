@@ -177,9 +177,25 @@ function buildTurnMetrics(turnId, events, responses, options = {}) {
   let realOutput = 0;
   for (const e of of('responseCompleted')) {
     const id = field(e, FIELDS.requestId);
-    const segment = (id && byId.get(id)) || { start: Date.parse(e.ts), end: null, realTokens: 0, inputTokens: 0 };
+    // Qoder does not always complete a request under the id it started with: on
+    // a superseded or retried request the completion arrives with a fresh id (or
+    // none), so the started segment stays open forever and the completion would
+    // otherwise become a segment of its own with start === end. Both then fail
+    // the >=200 ms filter below, which drops the time the answer actually took
+    // while keeping its tokens in the numerator — the turn ends up reporting a
+    // rate above its own peak, and a 生成 far short of how long it ran. Requests
+    // run one at a time here, so the completion belongs to the newest segment
+    // that had already started and is still open. Later starts must not be
+    // candidates: every request.started is already in `segments`, including ones
+    // that begin after this completion. Measured on the author's archive: 3 of
+    // 118 turns, one of them missing 202 s of a 286 s answer.
+    const ts = Date.parse(e.ts);
+    const segment =
+      (id && byId.get(id)) ||
+      [...segments].reverse().find((s) => s.end === null && s.start <= ts) ||
+      { start: ts, end: null, realTokens: 0, inputTokens: 0 };
     if (!segments.includes(segment)) segments.push(segment);
-    segment.end = Date.parse(e.ts);
+    segment.end = ts;
     segment.realTokens += Number(field(e, FIELDS.outputTokens)) || 0;
     segment.inputTokens += Number(field(e, FIELDS.inputTokens)) || 0;
   }
@@ -276,6 +292,13 @@ function buildTurnMetrics(turnId, events, responses, options = {}) {
   let peak = 0;
   let genSeconds = 0;
   let ratedSegments = 0;
+  // Tokens of the segments the peak is allowed to consider, i.e. the ones with a
+  // measurable duration. `rate` must divide this same set by genSeconds: taking
+  // the turn's whole token total over a denominator that skips <200 ms segments
+  // produces an average above every value it averages, so a turn could report a
+  // rate higher than its own peak. Measured on the author's archive: 1 of 149
+  // recomputed turns did exactly that through this path (the estimated one).
+  let ratedTokens = 0;
   for (let i = 0; i < selected.length; i += 1) {
     const seconds = secondsOf(selected[i]);
     // Sub-200 ms segments are bookkeeping artefacts, not generation; their rate
@@ -288,7 +311,10 @@ function buildTurnMetrics(turnId, events, responses, options = {}) {
       : tokensOf[i] >= 0
         ? tokensOf[i]
         : seconds * fallbackPerSecond;
-    if (tokens > 0 && tokens / seconds > peak) peak = tokens / seconds;
+    if (tokens > 0) {
+      ratedTokens += tokens;
+      if (tokens / seconds > peak) peak = tokens / seconds;
+    }
   }
 
   const inWindowEvents = (logical) =>
@@ -298,6 +324,16 @@ function buildTurnMetrics(turnId, events, responses, options = {}) {
 
   const wallSeconds = (end - start) / 1000;
   const tokens = hasReal ? windowRealOutput : estimatedTokens;
+  // Generation time as reported: sum of the measured segments, or the wall clock
+  // when nothing was measurable.
+  const generationSeconds = genSeconds > 0 ? genSeconds : wallSeconds;
+
+  // A turn whose segments are all under the floor has no per-segment rate to
+  // average, so the turn-level ratio is the only measurement there is; use it
+  // and let it define the peak, rather than reporting 0 tok/s for a real (if
+  // tiny) turn because nothing qualified.
+  const ratedRate = ratedTokens > 0 && genSeconds > 0 ? ratedTokens / genSeconds : 0;
+  const rate = ratedRate > 0 ? ratedRate : tokens > 0 && generationSeconds > 0 ? tokens / generationSeconds : 0;
 
   return {
     turnId,
@@ -309,12 +345,12 @@ function buildTurnMetrics(turnId, events, responses, options = {}) {
     reportedInputTokens: realInput,
     estimatedTokens,
     wallSeconds,
-    genSeconds: genSeconds > 0 ? genSeconds : wallSeconds,
+    genSeconds: generationSeconds,
     firstTokenMs,
     segments: ratedSegments,
     requests: selected.length,
-    rate: tokens > 0 && genSeconds > 0 ? tokens / genSeconds : 0,
-    peakRate: peak,
+    rate,
+    peakRate: Math.max(peak, rate),
     noSegmentsInWindow,
     window: { promptMs, boundaryMs, source: windowSource, segmentsTotal: segments.length },
     warnings,

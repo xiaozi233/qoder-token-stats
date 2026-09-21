@@ -257,6 +257,43 @@ test('a corrupt / half-written log still parses the good lines', () => {
   assert.ok(turn && turn.tokens > 0, `expected tokens > 0 despite the garbage, got ${turn?.tokens}`);
 });
 
+section('a completion that arrives under a different request id');
+
+// Qoder does not always complete a request under the id it started with. The
+// started segment then stays open forever and the completion would become a
+// segment of its own with start === end; both drop out of the >=200 ms filter,
+// so the answer's tokens stayed in the numerator while the time they took
+// vanished from the denominator. The turn then reported a rate above its own
+// peak — see the fixture, whose middle segment is 30 s of a 45 s turn.
+test('a completion with an unknown id is charged to the open segment', () => {
+  const home = homeFor('orphan-completion');
+  const turn = computeStats({ home, sessionId: sessionIdOf('orphan-completion') }).turn;
+  assert.ok(turn, 'expected a turn');
+  assert.equal(turn.tokens, 350, `every segment's tokens, including the orphan's, count once (got ${turn.tokens})`);
+  assert.equal(
+    turn.genSeconds,
+    45,
+    `generation time must include the 30 s the orphan completion took (got ${turn.genSeconds})`,
+  );
+  assert.equal(turn.segments, 3, `all three segments are long enough to rate (got ${turn.segments})`);
+  assert.equal(turn.requests, 3, `the orphan does not invent a fourth request (got ${turn.requests})`);
+});
+
+test('rate never exceeds the peak it is drawn from', () => {
+  const home = homeFor('orphan-completion');
+  const turn = computeStats({ home, sessionId: sessionIdOf('orphan-completion') }).turn;
+  // 350 tokens over 45 s is an average of the per-segment rates, so it cannot be
+  // above the largest of them.
+  assert.ok(
+    turn.rate <= turn.peakRate + 1e-9,
+    `rate ${turn.rate.toFixed(2)} must not exceed peak ${turn.peakRate.toFixed(2)}`,
+  );
+  assert.ok(
+    Math.abs(turn.tokens / turn.genSeconds - turn.rate) < 0.05,
+    'the printed 输出 / 生成 must reproduce the printed rate when every segment is rated',
+  );
+});
+
 section('the measurement boundary is shared by CLI and Stop');
 
 test('the archived line and the quoted line are the same number', () => {
