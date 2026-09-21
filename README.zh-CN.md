@@ -57,6 +57,21 @@ powershell -NoProfile -File dashboard\overlay.ps1 -Stop
 powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\overlay-autostart.ps1 -Install
 ```
 
+## 终端监控条
+
+同一行数字也可以画在 Qoder **自带的集成终端**里（xterm + node-pty）—— 在它窗口内、
+跟着它最小化，不经过模型、不需要调试端口、也不多一个窗口：
+
+```bash
+node dashboard/tui.mjs            # 常驻刷新，Ctrl+C 退出（或双击 dashboard\tui.cmd）
+node dashboard/tui.mjs --once     # 画一帧就退出
+node dashboard/tui.mjs --plain    # 不带 ANSI 颜色/光标控制，便于记录与测试
+node dashboard/tui.mjs --spark 40 # 趋势图保留多少轮（默认 24）
+```
+
+它只读钩子归档的那两个文件（`latest.json`、`history.jsonl`），不 import `runtime/` 里的
+任何东西，所以不会跟着日志格式变化一起坏。
+
 ## 工作原理
 
 Qoder 插件画不了 UI：钩子的 stdout 不会转发给模型，客户端的钩子渲染器只画状态、不画文字。

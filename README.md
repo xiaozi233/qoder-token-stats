@@ -65,6 +65,22 @@ powershell -NoProfile -File dashboard\overlay.ps1 -Stop
 powershell -NoProfile -ExecutionPolicy Bypass -File dashboard\overlay-autostart.ps1 -Install
 ```
 
+## Terminal strip
+
+The same archived line can be drawn inside Qoder's own integrated terminal
+(`xterm` + `node-pty`) — in-window, minimises with the app, and no model, debug
+port or second window involved:
+
+```bash
+node dashboard/tui.mjs            # resident; Ctrl+C exits (or double-click dashboard\tui.cmd)
+node dashboard/tui.mjs --once     # draw one frame and exit
+node dashboard/tui.mjs --plain    # no colour or cursor control, for logs
+node dashboard/tui.mjs --spark 40 # how many recent turns the trend keeps (default 24)
+```
+
+It reads the two files the hook archives (`latest.json`, `history.jsonl`) and
+imports nothing from `runtime/`, so it cannot rot with a log-format change.
+
 ## How it works
 
 Qoder plugins cannot paint UI: a hook's stdout is not forwarded to the model, and
